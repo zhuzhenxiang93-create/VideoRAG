@@ -1,0 +1,1 @@
+{"question_id":"q001","question":"系统使用什么模型进行图文检索？","answer":"CLIP","relevant_segment_ids":["demo_0001"],"question_type":"multimodal"}

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "improved-video-rag"
+version = "0.1.0"
+description = "Segment-level multimodal video RAG with hybrid recall, RRF, reranking and evidence-grounded generation."
+requires-python = ">=3.11"
+dependencies = [
+  "flask>=3.0,<4",
+  "numpy>=1.26,<3",
+]
+
+[project.optional-dependencies]
+models = [
+  "faiss-cpu>=1.8",
+  "accelerate>=1.0",
+  "qwen-vl-utils>=0.0.11",
+  "sentence-transformers>=3.0",
+  "torch>=2.4",
+  "transformers>=4.51",
+]
+video = [
+  "opencv-python-headless>=4.10",
+]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

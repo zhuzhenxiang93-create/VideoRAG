@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>多模态视频问答</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", sans-serif; }
+    body { margin: 0; background: #0b1020; color: #e8ecf4; }
+    main { width: min(1100px, 92vw); margin: 40px auto; }
+    .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 24px; }
+    .card { background: #141b2d; border: 1px solid #26314d; border-radius: 16px; padding: 20px; }
+    video { width: 100%; min-height: 360px; background: #05070c; border-radius: 10px; }
+    form { display: flex; gap: 10px; }
+    input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #394766; background: #0d1425; color: white; }
+    button { padding: 11px 16px; border: 0; border-radius: 8px; background: #5b8cff; color: white; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: wait; }
+    .answer { margin: 18px 0; line-height: 1.7; white-space: pre-wrap; }
+    .evidence { display: block; width: 100%; text-align: left; margin: 10px 0; background: #202c47; }
+    .meta { color: #9aaccc; font-size: 13px; }
+    .transcript { margin-top: 7px; color: #d6def0; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } video { min-height: 240px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>多模态视频问答</h1>
+  <div class="grid">
+    <section class="card">
+      <video id="player" controls preload="metadata"></video>
+      <p id="nowPlaying" class="meta">点击证据可跳转到对应视频时间。</p>
+    </section>
+    <section class="card">
+      <form id="questionForm">
+        <input id="question" placeholder="输入关于视频的问题" autocomplete="off">
+        <button id="submit">提问</button>
+      </form>
+      <div id="answer" class="answer"></div>
+      <div id="evidenceList"></div>
+    </section>
+  </div>
+</main>
+<script>
+  const form = document.getElementById("questionForm");
+  const input = document.getElementById("question");
+  const submit = document.getElementById("submit");
+  const answer = document.getElementById("answer");
+  const evidenceList = document.getElementById("evidenceList");
+  const player = document.getElementById("player");
+  const nowPlaying = document.getElementById("nowPlaying");
+
+  function playEvidence(item) {
+    const seek = () => {
+      player.currentTime = item.start_time;
+      player.play().catch(() => {});
+      nowPlaying.textContent = `${item.segment_id} · ${item.start_time.toFixed(1)}–${item.end_time.toFixed(1)} 秒`;
+    };
+    if (player.getAttribute("src") !== item.video_url) {
+      player.src = item.video_url;
+      player.addEventListener("loadedmetadata", seek, { once: true });
+      player.load();
+    } else {
+      seek();
+    }
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const question = input.value.trim();
+    if (!question) return;
+    submit.disabled = true;
+    answer.textContent = "正在检索视频证据……";
+    evidenceList.replaceChildren();
+    try {
+      const response = await fetch("/api/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "请求失败");
+      answer.textContent = data.answer;
+      data.evidence.forEach((item) => {
+        const button = document.createElement("button");
+        button.className = "evidence";
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = `${item.segment_id} · ${item.start_time.toFixed(1)}–${item.end_time.toFixed(1)} 秒 · 精排 ${item.rerank_score.toFixed(3)}`;
+        const transcript = document.createElement("div");
+        transcript.className = "transcript";
+        transcript.textContent = item.transcript || item.visual_caption || "无文本证据";
+        button.append(meta, transcript);
+        button.addEventListener("click", () => playEvidence(item));
+        evidenceList.appendChild(button);
+      });
+    } catch (error) {
+      answer.textContent = error.message;
+    } finally {
+      submit.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
