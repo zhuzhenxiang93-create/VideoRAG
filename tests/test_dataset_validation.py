@@ -6,6 +6,7 @@ SEGMENT = {
     "video_id": "video",
     "start_time": 0.0,
     "end_time": 20.0,
+    "keyframes": [{"timestamp": 2.0, "path": "frame.jpg"}],
 }
 
 
@@ -110,3 +111,17 @@ def test_verified_ocr_requires_text_and_frame_evidence():
     report = validate_questions([item], [SEGMENT])
     assert not report.valid
     assert any("OCR text" in value for value in report.errors)
+
+
+def test_verified_unanswerable_requires_non_overlapping_full_video_check():
+    item = question(
+        question_type="unknown_route", answerable=False, answer="", answer_aliases=[],
+        relevant_segment_ids=[], evidence_start=None, evidence_end=None,
+        verification_status="verified", annotation_source="human_review", reviewer_id="owner",
+        reviewed_at="2026-08-21T10:00:00+00:00", review_event_id="event-u",
+        modality_evidence={}, unanswerable_reason="entity_absent", checked_time_ranges=[[0.0, 20.0]],
+    )
+    assert validate_questions([item], [SEGMENT]).valid
+    report = validate_questions([{**item, "checked_time_ranges": [[0.0, 12.0], [10.0, 20.0]]}], [SEGMENT])
+    assert not report.valid
+    assert any("overlap" in value for value in report.errors)

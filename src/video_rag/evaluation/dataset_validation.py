@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 from typing import Any
+import re
 
 
 ALLOWED_TYPES = {"audio", "visual", "ocr", "multimodal", "unknown_route"}
@@ -87,6 +88,33 @@ def validate_questions(
     video_splits: dict[str, str] = {}
     paraphrase_splits: dict[str, str] = {}
     answerable_counts: Counter[str] = Counter()
+    video_duration_cache: dict[str, float] = {}
+
+    def normalized_text(value: str) -> str:
+        return re.sub(r"\s+", "", str(value)).lower()
+
+    def video_duration(video_id: str) -> float:
+        if video_id in video_duration_cache:
+            return video_duration_cache[video_id]
+        values = [segment for segment in segments if segment.get("video_id") == video_id]
+        fallback = max((float(segment["end_time"]) for segment in values), default=0.0)
+        measured = None
+        if values:
+            path = Path(str(values[0].get("source_path", "")))
+            if path.is_file():
+                try:
+                    import cv2
+
+                    capture = cv2.VideoCapture(str(path))
+                    fps = float(capture.get(cv2.CAP_PROP_FPS))
+                    frames = float(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+                    capture.release()
+                    if fps > 0 and frames > 0:
+                        measured = frames / fps
+                except ImportError:
+                    pass
+        video_duration_cache[video_id] = measured if measured is not None else fallback
+        return video_duration_cache[video_id]
 
     for position, item in enumerate(questions, 1):
         line = item.get("_line_number", position)
@@ -175,6 +203,8 @@ def validate_questions(
         ):
             errors.append(f"line {line}: invalid evidence interval")
         elif answerable:
+            if status == "verified" and float(end) > video_duration(item["video_id"]) + 0.05:
+                errors.append(f"line {line}: evidence interval exceeds actual video duration")
             for segment_id in relevant:
                 segment = segment_by_id.get(segment_id)
                 if segment is not None and not (
@@ -193,15 +223,40 @@ def validate_questions(
 
             def valid_asr() -> bool:
                 value = modalities.get("asr")
-                return (
+                if not (
                     isinstance(value, dict) and bool(str(value.get("quote", "")).strip())
                     and bool(value.get("segment_ids")) and value.get("human_verified") is True
+                ):
+                    return False
+                source_ids = value["segment_ids"]
+                if not set(source_ids).issubset(set(relevant)):
+                    return False
+                source_text = " ".join(
+                    segment_by_id[segment_id].get("transcript", "")
+                    for segment_id in source_ids if segment_id in segment_by_id
+                )
+                return normalized_text(value["quote"]) in normalized_text(source_text)
+
+            def valid_frame_timestamps(value: Any) -> bool:
+                if not isinstance(value, dict) or not value.get("frame_timestamps"):
+                    return False
+                known = {
+                    round(float(frame["timestamp"]), 3)
+                    for segment_id in relevant if segment_id in segment_by_id
+                    for frame in segment_by_id[segment_id].get("keyframes", [])
+                }
+                timestamps = value["frame_timestamps"]
+                return all(
+                    isinstance(timestamp, (int, float)) and round(float(timestamp), 3) in known
+                    and isinstance(start, (int, float)) and isinstance(end, (int, float))
+                    and float(start) <= float(timestamp) <= float(end)
+                    for timestamp in timestamps
                 )
 
             def valid_visual() -> bool:
                 value = modalities.get("visual")
                 return (
-                    isinstance(value, dict) and bool(value.get("frame_timestamps"))
+                    isinstance(value, dict) and valid_frame_timestamps(value)
                     and bool(str(value.get("human_observation", "")).strip())
                     and value.get("human_verified") is True
                 )
@@ -210,7 +265,7 @@ def validate_questions(
                 value = modalities.get("ocr")
                 return (
                     isinstance(value, dict) and bool(str(value.get("text", "")).strip())
-                    and bool(value.get("frame_timestamps")) and value.get("human_verified") is True
+                    and valid_frame_timestamps(value) and value.get("human_verified") is True
                 )
 
             if not answerable:
@@ -221,6 +276,25 @@ def validate_questions(
                 checked = item.get("checked_time_ranges")
                 if not isinstance(checked, list) or not checked:
                     errors.append(f"line {line}: verified unanswerable item requires checked_time_ranges")
+                else:
+                    video_end = video_duration(item["video_id"])
+                    valid_ranges = all(
+                        isinstance(value, list) and len(value) == 2
+                        and all(isinstance(point, (int, float)) for point in value)
+                        and 0 <= float(value[0]) < float(value[1]) <= video_end
+                        for value in checked
+                    )
+                    if not valid_ranges:
+                        errors.append(f"line {line}: checked_time_ranges contain an invalid range")
+                    else:
+                        ordered_ranges = sorted((float(value[0]), float(value[1])) for value in checked)
+                        if any(right[0] < left[1] for left, right in zip(ordered_ranges, ordered_ranges[1:])):
+                            errors.append(f"line {line}: checked_time_ranges overlap")
+                        if (
+                            ordered_ranges[0][0] > 0.5 or ordered_ranges[-1][1] < video_end - 0.5
+                            or any(right[0] - left[1] > 0.5 for left, right in zip(ordered_ranges, ordered_ranges[1:]))
+                        ):
+                            errors.append(f"line {line}: verified unanswerable review must cover the full video")
             elif question_type == "audio" and not valid_asr():
                 errors.append(f"line {line}: verified audio item requires ASR quote and segment_ids")
             elif question_type == "visual" and not valid_visual():
