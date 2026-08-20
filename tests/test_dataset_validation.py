@@ -51,3 +51,38 @@ def test_unanswerable_question_cannot_leak_evidence():
     )
     assert not report.valid
     assert any("must not contain relevant segments" in value for value in report.errors)
+
+
+def test_verified_status_requires_append_only_human_review_provenance():
+    report = validate_questions(
+        [question(verification_status="verified", annotation_source="manual")], [SEGMENT]
+    )
+    assert not report.valid
+    assert any("reviewer_id" in value for value in report.errors)
+    assert any("review_event_id" in value for value in report.errors)
+
+
+def test_valid_human_review_can_remain_unsplit_until_freeze():
+    item = question(
+        verification_status="verified",
+        annotation_source="human_review",
+        reviewer_id="project_owner",
+        reviewed_at="2026-08-21T10:00:00+00:00",
+        review_event_id="event-1",
+    )
+    assert validate_questions([item], [SEGMENT]).valid
+    assert not validate_questions([item], [SEGMENT], require_verified_splits=True).valid
+
+
+def test_same_video_cannot_leak_across_frozen_splits():
+    common = {
+        "verification_status": "verified",
+        "annotation_source": "human_review",
+        "reviewer_id": "project_owner",
+        "reviewed_at": "2026-08-21T10:00:00+00:00",
+    }
+    first = question(**common, review_event_id="event-1", split="development")
+    second = question(**common, question_id="q2", review_event_id="event-2", split="test")
+    report = validate_questions([first, second], [SEGMENT], require_verified_splits=True)
+    assert not report.valid
+    assert any("leaks across splits" in value for value in report.errors)

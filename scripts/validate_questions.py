@@ -12,9 +12,13 @@ def main() -> None:
     parser.add_argument("--questions", required=True, type=Path)
     parser.add_argument("--segments", default=Path("artifacts/segments.jsonl"), type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--require-verified-splits", action="store_true")
     args = parser.parse_args()
 
-    report = validate_questions(read_jsonl(args.questions), read_jsonl(args.segments))
+    report = validate_questions(
+        read_jsonl(args.questions), read_jsonl(args.segments),
+        require_verified_splits=args.require_verified_splits,
+    )
     text = json.dumps(report.to_dict(), ensure_ascii=False, indent=2)
     print(text)
     if args.output:

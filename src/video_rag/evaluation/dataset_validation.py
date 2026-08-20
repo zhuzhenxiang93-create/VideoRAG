@@ -4,11 +4,13 @@ from collections import Counter
 from dataclasses import dataclass
 import json
 from pathlib import Path
+from datetime import datetime
 from typing import Any
 
 
 ALLOWED_TYPES = {"audio", "visual", "ocr", "multimodal", "unknown"}
 ALLOWED_STATUSES = {"verified", "generated_candidate"}
+ALLOWED_SPLITS = {"development", "validation", "test"}
 REQUIRED_FIELDS = {
     "question_id",
     "question",
@@ -31,6 +33,7 @@ class ValidationReport:
     verified_count: int
     candidate_count: int
     type_counts: dict[str, int]
+    split_counts: dict[str, int]
     errors: tuple[str, ...]
     warnings: tuple[str, ...]
 
@@ -45,6 +48,7 @@ class ValidationReport:
             "verified_count": self.verified_count,
             "candidate_count": self.candidate_count,
             "type_counts": self.type_counts,
+            "split_counts": self.split_counts,
             "errors": list(self.errors),
             "warnings": list(self.warnings),
         }
@@ -65,7 +69,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def validate_questions(
-    questions: list[dict[str, Any]], segments: list[dict[str, Any]]
+    questions: list[dict[str, Any]], segments: list[dict[str, Any]], *, require_verified_splits: bool = False
 ) -> ValidationReport:
     errors: list[str] = []
     warnings: list[str] = []
@@ -73,6 +77,8 @@ def validate_questions(
     segment_by_id = {item["segment_id"]: item for item in segments}
     status_counts: Counter[str] = Counter()
     type_counts: Counter[str] = Counter()
+    split_counts: Counter[str] = Counter()
+    video_splits: dict[str, str] = {}
 
     for position, item in enumerate(questions, 1):
         line = item.get("_line_number", position)
@@ -96,12 +102,43 @@ def validate_questions(
             errors.append(f"line {line}: unsupported verification_status {status!r}")
         if status == "verified" and not str(item["annotation_source"]).strip():
             errors.append(f"line {line}: verified item requires annotation_source")
+        if status == "verified":
+            if item.get("annotation_source") != "human_review":
+                errors.append(f"line {line}: verified item annotation_source must be 'human_review'")
+            if not str(item.get("reviewer_id", "")).strip():
+                errors.append(f"line {line}: verified item requires reviewer_id")
+            reviewed_at = item.get("reviewed_at")
+            try:
+                parsed = datetime.fromisoformat(str(reviewed_at).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    raise ValueError
+            except (TypeError, ValueError):
+                errors.append(f"line {line}: verified item requires timezone-aware reviewed_at")
+            if not str(item.get("review_event_id", "")).strip():
+                errors.append(f"line {line}: verified item requires append-only review_event_id")
+            split = item.get("split")
+            if split is not None:
+                split_counts[split] += 1
+                if split not in ALLOWED_SPLITS:
+                    errors.append(f"line {line}: invalid split {split!r}")
+                previous = video_splits.setdefault(item["video_id"], split)
+                if previous != split:
+                    errors.append(f"line {line}: video {item['video_id']!r} leaks across splits {previous!r}/{split!r}")
+            elif require_verified_splits:
+                errors.append(f"line {line}: verified item requires frozen split")
 
         answerable = item["answerable"]
         if not isinstance(answerable, bool):
             errors.append(f"line {line}: answerable must be boolean")
         if answerable and not str(item["answer"]).strip():
             errors.append(f"line {line}: answerable item requires answer")
+        aliases = item["answer_aliases"]
+        if not isinstance(aliases, list) or any(not isinstance(value, str) or not value.strip() for value in aliases):
+            errors.append(f"line {line}: answer_aliases must be a list of non-empty strings")
+        elif len({value.strip() for value in aliases}) != len(aliases):
+            errors.append(f"line {line}: answer_aliases must not contain duplicates")
+        elif answerable and str(item["answer"]).strip() not in {value.strip() for value in aliases}:
+            errors.append(f"line {line}: answer_aliases must include the canonical answer")
         if not answerable and item["relevant_segment_ids"]:
             errors.append(f"line {line}: unanswerable item must not contain relevant segments")
 
@@ -123,6 +160,14 @@ def validate_questions(
             and 0 <= start < end
         ):
             errors.append(f"line {line}: invalid evidence interval")
+        elif answerable:
+            for segment_id in relevant:
+                segment = segment_by_id.get(segment_id)
+                if segment is not None and not (
+                    max(float(start), float(segment["start_time"]))
+                    < min(float(end), float(segment["end_time"]))
+                ):
+                    errors.append(f"line {line}: relevant segment {segment_id!r} does not overlap evidence interval")
         if not answerable and (start is not None or end is not None):
             errors.append(f"line {line}: unanswerable evidence interval must be null")
 
@@ -136,6 +181,7 @@ def validate_questions(
         verified_count=status_counts.get("verified", 0),
         candidate_count=status_counts.get("generated_candidate", 0),
         type_counts=dict(sorted(type_counts.items())),
+        split_counts=dict(sorted(split_counts.items())),
         errors=tuple(errors),
         warnings=tuple(warnings),
     )
