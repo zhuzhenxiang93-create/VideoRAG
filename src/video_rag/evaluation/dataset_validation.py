@@ -8,9 +8,13 @@ from datetime import datetime
 from typing import Any
 
 
-ALLOWED_TYPES = {"audio", "visual", "ocr", "multimodal", "unknown"}
+ALLOWED_TYPES = {"audio", "visual", "ocr", "multimodal", "unknown_route"}
 ALLOWED_STATUSES = {"verified", "generated_candidate"}
 ALLOWED_SPLITS = {"development", "validation", "test"}
+ALLOWED_UNANSWERABLE_REASONS = {
+    "entity_absent", "event_absent", "insufficient_visual_evidence",
+    "insufficient_audio_evidence", "ambiguous_reference", "outside_video_scope",
+}
 REQUIRED_FIELDS = {
     "question_id",
     "question",
@@ -34,6 +38,7 @@ class ValidationReport:
     candidate_count: int
     type_counts: dict[str, int]
     split_counts: dict[str, int]
+    answerable_counts: dict[str, int]
     errors: tuple[str, ...]
     warnings: tuple[str, ...]
 
@@ -49,6 +54,7 @@ class ValidationReport:
             "candidate_count": self.candidate_count,
             "type_counts": self.type_counts,
             "split_counts": self.split_counts,
+            "answerable_counts": self.answerable_counts,
             "errors": list(self.errors),
             "warnings": list(self.warnings),
         }
@@ -79,6 +85,8 @@ def validate_questions(
     type_counts: Counter[str] = Counter()
     split_counts: Counter[str] = Counter()
     video_splits: dict[str, str] = {}
+    paraphrase_splits: dict[str, str] = {}
+    answerable_counts: Counter[str] = Counter()
 
     for position, item in enumerate(questions, 1):
         line = item.get("_line_number", position)
@@ -124,10 +132,16 @@ def validate_questions(
                 previous = video_splits.setdefault(item["video_id"], split)
                 if previous != split:
                     errors.append(f"line {line}: video {item['video_id']!r} leaks across splits {previous!r}/{split!r}")
+                group = item.get("paraphrase_group_id")
+                if group:
+                    previous_group_split = paraphrase_splits.setdefault(str(group), split)
+                    if previous_group_split != split:
+                        errors.append(f"line {line}: paraphrase group {group!r} leaks across splits")
             elif require_verified_splits:
                 errors.append(f"line {line}: verified item requires frozen split")
 
         answerable = item["answerable"]
+        answerable_counts[str(answerable).lower()] += 1
         if not isinstance(answerable, bool):
             errors.append(f"line {line}: answerable must be boolean")
         if answerable and not str(item["answer"]).strip():
@@ -171,6 +185,51 @@ def validate_questions(
         if not answerable and (start is not None or end is not None):
             errors.append(f"line {line}: unanswerable evidence interval must be null")
 
+        if status == "verified":
+            modalities = item.get("modality_evidence")
+            if not isinstance(modalities, dict):
+                errors.append(f"line {line}: verified item requires modality_evidence object")
+                modalities = {}
+
+            def valid_asr() -> bool:
+                value = modalities.get("asr")
+                return (
+                    isinstance(value, dict) and bool(str(value.get("quote", "")).strip())
+                    and bool(value.get("segment_ids")) and value.get("human_verified") is True
+                )
+
+            def valid_visual() -> bool:
+                value = modalities.get("visual")
+                return (
+                    isinstance(value, dict) and bool(value.get("frame_timestamps"))
+                    and bool(str(value.get("human_observation", "")).strip())
+                    and value.get("human_verified") is True
+                )
+
+            def valid_ocr() -> bool:
+                value = modalities.get("ocr")
+                return (
+                    isinstance(value, dict) and bool(str(value.get("text", "")).strip())
+                    and bool(value.get("frame_timestamps")) and value.get("human_verified") is True
+                )
+
+            if not answerable:
+                if modalities:
+                    errors.append(f"line {line}: unanswerable item must not claim supporting modality evidence")
+                if item.get("unanswerable_reason") not in ALLOWED_UNANSWERABLE_REASONS:
+                    errors.append(f"line {line}: verified unanswerable item requires a valid unanswerable_reason")
+                checked = item.get("checked_time_ranges")
+                if not isinstance(checked, list) or not checked:
+                    errors.append(f"line {line}: verified unanswerable item requires checked_time_ranges")
+            elif question_type == "audio" and not valid_asr():
+                errors.append(f"line {line}: verified audio item requires ASR quote and segment_ids")
+            elif question_type == "visual" and not valid_visual():
+                errors.append(f"line {line}: verified visual item requires frame timestamps")
+            elif question_type == "ocr" and not valid_ocr():
+                errors.append(f"line {line}: verified OCR item requires OCR text and frame timestamps")
+            elif question_type == "multimodal" and sum((valid_asr(), valid_visual(), valid_ocr())) < 2:
+                errors.append(f"line {line}: verified multimodal item requires at least two valid modality sources")
+
     if type_counts and max(type_counts.values()) / sum(type_counts.values()) > 0.70:
         warnings.append("question types are severely imbalanced (>70% in one type)")
     if status_counts.get("verified", 0) == 0:
@@ -182,6 +241,7 @@ def validate_questions(
         candidate_count=status_counts.get("generated_candidate", 0),
         type_counts=dict(sorted(type_counts.items())),
         split_counts=dict(sorted(split_counts.items())),
+        answerable_counts=dict(sorted(answerable_counts.items())),
         errors=tuple(errors),
         warnings=tuple(warnings),
     )

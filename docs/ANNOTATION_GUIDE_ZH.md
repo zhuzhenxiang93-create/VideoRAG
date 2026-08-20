@@ -15,9 +15,11 @@
 | `visual` | 必须观察人物、物体、动作、颜色、位置或场景 | 只检索视觉描述文本但没有核对原帧 |
 | `ocr` | 答案来自画面中文字、标题、字幕条、标志或数字 | Qwen-VL概括中出现文字但未核对原图 |
 | `multimodal` | 必须联合至少两种来源才能唯一回答，如语音实体+画面动作 | 任一单路证据已经足够 |
-| `unknown` | 视频证据不足，应拒答 | 问题含糊但视频中其实有明确答案 |
+| `unknown_route` | 在线路由器无法可靠判断所需模态 | 不能用它代替“视频中无答案” |
 
-无答案题使用 `question_type=unknown`、`answerable=false`、空答案和空相关segment，不得用外部常识补答。
+`question_type`与`answerable`相互独立。无答案题使用`answerable=false`、空答案和空相关segment，并记录`unanswerable_reason`及人工实际检查的`checked_time_ranges`；在线路由的`unknown_route`不能代替无答案标签。
+
+verified题必须保存结构化`modality_evidence`：audio需人工确认ASR原文；visual需帧时间戳和人工画面观察；OCR需帧时间戳和人工抄录文字；multimodal需至少两种人工确认来源，并确认任一单路不足以完整回答。
 
 ## 3. 证据与相关segment
 
@@ -42,6 +44,7 @@
 4. 修正题型、答案、别名、证据时间和全部相关segment。
 5. 接受或拒绝；拒绝必须选择原因。
 6. 接受事件追加写入审计日志，禁止覆盖历史事件。
+7. 如后续发现错误，追加`reopen`并重新决策；导出只认日志顺序中的最新有效决策。
 
 ## 6. 拒绝原因
 
@@ -60,3 +63,10 @@
 - 在视频分组约束下尽量保持题型分层，目标约70%/15%/15%。
 - development用于错误分析，validation用于选择路由、融合、depth和拒答阈值；test冻结SHA后只做最终评估。
 - 每次导出保存问题文件SHA、split manifest、代码commit、模型/index manifest和硬件信息。
+- 同一`paraphrase_group_id`不得跨split；split按视频及近重复关联形成的连通组整体分配。
+
+## 8. 二次QA
+
+- 所有带`review_flags`的高风险题必须二审。
+- 无flag题确定性抽样至少20%做盲二审。
+- 二审使用`reopen`事件，不修改或删除初审日志；报告初审接受率、二审修改率和最终拒绝率。

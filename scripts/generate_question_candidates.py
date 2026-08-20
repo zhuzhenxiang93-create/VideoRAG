@@ -11,7 +11,7 @@ from video_rag.adapters import QwenVLService
 from video_rag.evaluation.dataset_validation import read_jsonl, validate_questions
 
 
-TARGETS = {"audio": 50, "visual": 45, "multimodal": 40, "unknown": 40}
+TARGETS = {"audio": 50, "visual": 45, "multimodal": 40, "unknown_route": 40}
 
 
 def parse_json_array(text: str) -> list[dict]:
@@ -54,9 +54,9 @@ def prompt_for(question_type: str, rows: list[dict]) -> str:
         "audio": "问题必须只靠ASR可回答，答案必须是ASR直接支持的短语。",
         "visual": "问题必须观察原画面才能回答，视觉描述只用于生成候选，之后必须人工核对原帧。",
         "multimodal": "问题必须联合ASR和画面信息才能唯一回答，任一单路单独都不够。",
-        "unknown": "为每个目标视频写一个视频证据中不应有答案的问题；不要根据常识给答案。",
+        "unknown_route": "为每个目标视频写一个视频证据中不应有答案的问题；不要根据常识给答案。",
     }[question_type]
-    unknown_rule = 'unknown题的answer必须是空字符串，answer_aliases必须是空数组。' if question_type == "unknown" else "answer_aliases必须包含answer本身。"
+    unknown_rule = '无答案题的answer必须是空字符串，answer_aliases必须是空数组。' if question_type == "unknown_route" else "answer_aliases必须包含answer本身。"
     return (
         "你在为中文视频问答项目生成待人工复核候选，不能把候选称为人工标注。"
         f"{rule}{unknown_rule} 每个source恰好生成一个问题。不要输出解释，只输出JSON数组，"
@@ -88,7 +88,7 @@ def main() -> None:
         "audio": round_robin_segments(segments, lambda item: bool(item.get("transcript", "").strip())),
         "visual": round_robin_segments(segments, lambda item: bool(item.get("keyframes")) and bool(item.get("visual_caption", "").strip())),
         "multimodal": round_robin_segments(segments, lambda item: bool(item.get("transcript", "").strip()) and bool(item.get("visual_caption", "").strip())),
-        "unknown": round_robin_segments(segments, lambda item: True),
+        "unknown_route": round_robin_segments(segments, lambda item: True),
     }
     requests = []
     for question_type, target in TARGETS.items():
@@ -108,7 +108,8 @@ def main() -> None:
     args.raw_log.parent.mkdir(parents=True, exist_ok=True)
     for batch_number, (question_type, rows) in enumerate(requests):
         source_ids = [item["segment_id"] for item in rows]
-        batch_id = hashlib.sha256((question_type + "\0" + "\0".join(source_ids)).encode()).hexdigest()[:20]
+        legacy_generation_type = "unknown" if question_type == "unknown_route" else question_type
+        batch_id = hashlib.sha256((legacy_generation_type + "\0" + "\0".join(source_ids)).encode()).hexdigest()[:20]
         if batch_id in completed:
             parsed = completed[batch_id]["parsed"]
         else:
@@ -124,7 +125,7 @@ def main() -> None:
             value = by_source.get(source_id)
             if value is None:
                 continue
-            answerable = question_type != "unknown"
+            answerable = question_type != "unknown_route"
             answer = str(value.get("answer", "")).strip() if answerable else ""
             aliases = [str(item).strip() for item in value.get("answer_aliases", []) if str(item).strip()] if answerable else []
             if answer and answer not in aliases:

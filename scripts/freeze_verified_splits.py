@@ -5,6 +5,7 @@ from collections import Counter, defaultdict
 import hashlib
 import json
 from pathlib import Path
+import random
 
 from video_rag.evaluation.dataset_validation import ALLOWED_TYPES, read_jsonl, validate_questions
 
@@ -21,32 +22,69 @@ def assign_video_groups(questions: list[dict]) -> dict[str, str]:
     by_video: defaultdict[str, list[dict]] = defaultdict(list)
     for item in questions:
         by_video[item["video_id"]].append(item)
-    total = len(questions)
-    total_types = Counter(item["question_type"] for item in questions)
-    split_total = Counter()
-    split_types: dict[str, Counter] = {name: Counter() for name in SPLITS}
-    assignments = {}
+    parent = {video_id: video_id for video_id in by_video}
 
-    def cost(split: str, rows: list[dict]) -> float:
-        projected_total = split_total[split] + len(rows)
-        target_total = max(1.0, total * RATIOS[split])
-        value = ((projected_total - target_total) / target_total) ** 2
-        row_types = Counter(item["question_type"] for item in rows)
-        for question_type, count in total_types.items():
-            target = max(1.0, count * RATIOS[split])
-            projected = split_types[split][question_type] + row_types[question_type]
-            value += ((projected - target) / target) ** 2
+    def find(value: str) -> str:
+        while parent[value] != value:
+            parent[value] = parent[parent[value]]
+            value = parent[value]
         return value
 
-    videos = sorted(by_video, key=lambda value: (-len(by_video[value]), hashlib.sha256(value.encode()).hexdigest()))
-    # Seed every split with one video so no split is accidentally empty.
-    for index, video_id in enumerate(videos):
-        rows = by_video[video_id]
-        split = SPLITS[index] if index < len(SPLITS) else min(SPLITS, key=lambda name: (cost(name, rows), SPLITS.index(name)))
-        assignments[video_id] = split
-        split_total[split] += len(rows)
-        split_types[split].update(item["question_type"] for item in rows)
-    return assignments
+    def union(left: str, right: str) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    paraphrase_videos: defaultdict[str, set[str]] = defaultdict(set)
+    for item in questions:
+        if item.get("paraphrase_group_id"):
+            paraphrase_videos[str(item["paraphrase_group_id"])].add(item["video_id"])
+    for videos_in_group in paraphrase_videos.values():
+        ordered = sorted(videos_in_group)
+        for value in ordered[1:]:
+            union(ordered[0], value)
+    component_videos: defaultdict[str, list[str]] = defaultdict(list)
+    for video_id in by_video:
+        component_videos[find(video_id)].append(video_id)
+    component_rows = {
+        root: [item for video_id in videos for item in by_video[video_id]]
+        for root, videos in component_videos.items()
+    }
+    total = len(questions)
+    total_types = Counter(item["question_type"] for item in questions)
+    components = sorted(component_rows, key=lambda value: (-len(component_rows[value]), hashlib.sha256(value.encode()).hexdigest()))
+    rng = random.Random(20260821)
+
+    def objective(candidate: dict[str, str]) -> float:
+        split_rows = {
+            split: [item for component, assigned in candidate.items() if assigned == split for item in component_rows[component]]
+            for split in SPLITS
+        }
+        value = 0.0
+        for split, rows in split_rows.items():
+            value += 100.0 * ((len(rows) - total * RATIOS[split]) / total) ** 2
+            row_types = Counter(item["question_type"] for item in rows)
+            for question_type, count in total_types.items():
+                value += 10.0 * ((row_types[question_type] - count * RATIOS[split]) / max(1, count)) ** 2
+                if row_types[question_type] == 0:
+                    value += 1000.0
+        return value
+
+    best, best_score = None, float("inf")
+    for _ in range(50_000):
+        candidate = {
+            component: rng.choices(SPLITS, weights=[RATIOS[value] for value in SPLITS], k=1)[0]
+            for component in components
+        }
+        score = objective(candidate)
+        if score < best_score:
+            best, best_score = candidate, score
+    assert best is not None
+    return {
+        video_id: best[component]
+        for component, videos in component_videos.items()
+        for video_id in videos
+    }
 
 
 def main() -> None:

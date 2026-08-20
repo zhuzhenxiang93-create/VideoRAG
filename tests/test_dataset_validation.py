@@ -69,6 +69,7 @@ def test_valid_human_review_can_remain_unsplit_until_freeze():
         reviewer_id="project_owner",
         reviewed_at="2026-08-21T10:00:00+00:00",
         review_event_id="event-1",
+        modality_evidence={"visual": {"frame_timestamps": [2.0], "human_observation": "红旗", "human_verified": True}},
     )
     assert validate_questions([item], [SEGMENT]).valid
     assert not validate_questions([item], [SEGMENT], require_verified_splits=True).valid
@@ -80,9 +81,32 @@ def test_same_video_cannot_leak_across_frozen_splits():
         "annotation_source": "human_review",
         "reviewer_id": "project_owner",
         "reviewed_at": "2026-08-21T10:00:00+00:00",
+        "modality_evidence": {"visual": {"frame_timestamps": [2.0], "human_observation": "红旗", "human_verified": True}},
     }
     first = question(**common, review_event_id="event-1", split="development")
     second = question(**common, question_id="q2", review_event_id="event-2", split="test")
     report = validate_questions([first, second], [SEGMENT], require_verified_splits=True)
     assert not report.valid
     assert any("leaks across splits" in value for value in report.errors)
+
+
+def test_unknown_route_is_independent_from_answerable_false():
+    item = question(
+        question_type="unknown_route", answerable=False, answer="", answer_aliases=[],
+        relevant_segment_ids=[], evidence_start=None, evidence_end=None,
+    )
+    assert validate_questions([item], [SEGMENT]).valid
+    assert validate_questions([{**item, "question_type": "visual"}], [SEGMENT]).valid
+    report = validate_questions([{**item, "question_type": "unknown"}], [SEGMENT])
+    assert not report.valid
+
+
+def test_verified_ocr_requires_text_and_frame_evidence():
+    item = question(
+        question_type="ocr", verification_status="verified", annotation_source="human_review",
+        reviewer_id="owner", reviewed_at="2026-08-21T10:00:00+00:00", review_event_id="event-ocr",
+        modality_evidence={"visual": {"frame_timestamps": [2.0]}},
+    )
+    report = validate_questions([item], [SEGMENT])
+    assert not report.valid
+    assert any("OCR text" in value for value in report.errors)
