@@ -11,3 +11,5 @@ data/processed/
 *.faiss
 *.wav
 *.mp4
+*.webm
+*.ogv

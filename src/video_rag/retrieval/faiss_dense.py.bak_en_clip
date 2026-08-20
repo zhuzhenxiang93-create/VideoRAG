@@ -188,9 +188,6 @@ class ClipVisionRetriever(FaissDenseRetriever):
     ) -> None:
         super().__init__(index_dir, force_rebuild=force_rebuild)
         self.model_name = model_name
-        # Keep English and Chinese CLIP indexes side by side for reproducible ablations.
-        if "chinese-clip" in model_name.lower():
-            self.name = "vision_dense_zh"
         self.device = device
         self._model: Any = None
         self._processor: Any = None
@@ -199,23 +196,12 @@ class ClipVisionRetriever(FaissDenseRetriever):
         if self._model is None:
             try:
                 import torch
-                from transformers import (
-                    CLIPModel,
-                    CLIPProcessor,
-                    ChineseCLIPModel,
-                    ChineseCLIPProcessor,
-                )
+                from transformers import CLIPModel, CLIPProcessor
             except ImportError as exc:
                 raise RuntimeError("CLIP retrieval requires torch and transformers") from exc
             actual_device = self.device if self.device != "cuda" or torch.cuda.is_available() else "cpu"
-            if "chinese-clip" in self.model_name.lower():
-                model_class = ChineseCLIPModel
-                processor_class = ChineseCLIPProcessor
-            else:
-                model_class = CLIPModel
-                processor_class = CLIPProcessor
-            self._model = model_class.from_pretrained(self.model_name).eval().to(actual_device)
-            self._processor = processor_class.from_pretrained(self.model_name)
+            self._model = CLIPModel.from_pretrained(self.model_name).eval().to(actual_device)
+            self._processor = CLIPProcessor.from_pretrained(self.model_name)
             self.device = actual_device
         return self._model, self._processor
 

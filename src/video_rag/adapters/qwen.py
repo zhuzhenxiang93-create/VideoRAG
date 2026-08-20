@@ -220,8 +220,8 @@ class QwenVLCaptioner:
                 {
                     "type": "text",
                     "text": (
-                        "请客观、简洁地描述画面中可见的人物、物体、动作、文字和场景。"
-                        "不要猜测画面外的信息。"
+                        "Objectively describe the visible people, objects, actions, "
+                        "on-screen text, and scene. Do not infer information that is not visible."
                     ),
                 },
             ],
@@ -230,9 +230,16 @@ class QwenVLCaptioner:
 
 
 class QwenVLEvidenceGenerator:
-    def __init__(self, service: QwenVLService, *, max_images: int = 6) -> None:
+    def __init__(
+        self,
+        service: QwenVLService,
+        *,
+        max_images: int = 6,
+        unload_after_generate: bool = False,
+    ) -> None:
         self.service = service
         self.max_images = max_images
+        self.unload_after_generate = unload_after_generate
 
     def generate(self, query: str, segments: list[VideoSegment]) -> str:
         content: list[dict[str, Any]] = []
@@ -240,7 +247,7 @@ class QwenVLEvidenceGenerator:
         image_count = 0
         for segment in segments:
             evidence_text.append(
-                f"[{segment.segment_id}] 时间 {segment.start_time:.1f}-{segment.end_time:.1f} 秒\n"
+                f"[{segment.segment_id}] Time {segment.start_time:.1f}-{segment.end_time:.1f} seconds\n"
                 f"{segment.searchable_text}"
             )
             for frame in segment.keyframes:
@@ -255,10 +262,15 @@ class QwenVLEvidenceGenerator:
                 )
                 image_count += 1
         instruction = (
-            "你是视频问答助手。只能根据下面的候选证据回答，不得补充外部事实。"
-            "如果证据不足，请只回答“根据当前视频内容无法确定”。"
-            "回答后用方括号引用支持结论的 segment_id。\n\n"
-            f"问题：{query}\n\n候选证据：\n" + "\n\n".join(evidence_text)
+            "Answer the question using only the candidate video evidence below. "
+            "Do not introduce external facts. If the evidence is insufficient, answer exactly: "
+            "The current video evidence is insufficient to determine the answer. "
+            "Give a concise answer and cite the supporting segment_id.\n\n"
+            f"Question: {query}\n\nCandidate evidence:\n" + "\n\n".join(evidence_text)
         )
         content.append({"type": "text", "text": instruction})
-        return self.service.infer(content)
+        try:
+            return self.service.infer(content)
+        finally:
+            if self.unload_after_generate:
+                self.service.unload()

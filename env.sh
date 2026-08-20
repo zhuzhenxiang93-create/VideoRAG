@@ -1,0 +1,10 @@
+export VIDEORAG_ROOT=/root/autodl-tmp/VideoRAG
+export HF_HOME=/root/autodl-tmp/cache/huggingface
+export HUGGINGFACE_HUB_CACHE=/root/autodl-tmp/cache/huggingface/hub
+export TORCH_HOME=/root/autodl-tmp/cache/torch
+export PIP_CACHE_DIR=/root/autodl-tmp/cache/pip
+export XDG_CACHE_HOME=/root/autodl-tmp/cache
+export TMPDIR=/root/autodl-tmp/cache/tmp
+export PATH=/root/autodl-tmp/envs/videorag/bin:$PATH
+export HF_ENDPOINT=https://hf-mirror.com
+export HF_HUB_DISABLE_XET=1

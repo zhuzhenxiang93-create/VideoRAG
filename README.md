@@ -25,7 +25,7 @@
 - 基于采样、场景变化和清晰度的关键帧提取；
 - Qwen2.5-VL 关键帧客观描述；
 - Qwen3-Embedding + FAISS 文本语义召回；
-- CLIP + FAISS 图文召回；
+- OFA Chinese-CLIP + FAISS 中文图文召回；
 - Qwen3-Reranker 候选证据精排；
 - Qwen2.5-VL 基于 Top-3 证据单次生成；
 - 点击证据跳转至视频对应时间；
@@ -140,7 +140,7 @@ python scripts/run_server.py --host 0.0.0.0 --port 5000 --low-vram
 
 `--low-vram` 会在候选精排结束后卸载 0.6B Reranker，再加载 Qwen2.5-VL。速度更慢，但降低多个模型同时驻留造成的显存峰值。
 
-浏览器访问 `http://服务器地址:5000`。点击任意证据，播放器会加载对应源视频并跳转到 `start_time`。
+浏览器访问 `http://服务器地址:5000`。生产或公网使用时应放在反向代理和认证之后；当前开发服务建议绑定 `127.0.0.1` 并通过 SSH 隧道访问。点击任意证据，播放器会加载对应源视频并跳转到 `start_time`。
 
 ## 标注与评测
 
@@ -164,11 +164,11 @@ python scripts/evaluate_retrieval.py \
   --output artifacts/retrieval_metrics.json
 ```
 
-输出四组结果：
+输出单路、双路、三路RRF以及可选Reranker的消融结果：
 
 - BM25-like 关键词召回；
 - Qwen3-Embedding；
-- CLIP；
+- OFA Chinese-CLIP；
 - 三路 RRF。
 
 指标包括 Recall@1/5/10、MRR 和 nDCG@1/5/10。
@@ -194,7 +194,7 @@ python scripts/evaluate_answers.py \
 
 - `openai/whisper-small`
 - `Qwen/Qwen3-Embedding-0.6B`
-- `openai/clip-vit-large-patch14`
+- `OFA-Sys/chinese-clip-vit-base-patch16`
 - `Qwen/Qwen3-Reranker-0.6B`
 - `Qwen/Qwen2.5-VL-7B-Instruct`
 

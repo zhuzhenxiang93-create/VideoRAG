@@ -6,6 +6,7 @@ from pathlib import Path
 from video_rag.adapters import Qwen3Reranker, QwenVLEvidenceGenerator, QwenVLService
 from video_rag.api import create_app
 from video_rag.config import load_config
+from video_rag.index_manifest import validate_manifest
 from video_rag.pipeline import VideoRAGPipeline
 from video_rag.retrieval import ClipVisionRetriever, InMemoryLexicalRetriever, QwenTextRetriever
 from video_rag.storage import load_segments
@@ -20,6 +21,12 @@ def build_real_pipeline(
     low_vram: bool = False,
 ) -> VideoRAGPipeline:
     config = load_config(config_path)
+    validate_manifest(
+        segments_path=segments_path,
+        index_dir=index_dir,
+        text_model=config.models.text_embedding,
+        clip_model=config.models.clip,
+    )
     service = QwenVLService(config.models.vision_language)
     pipeline = VideoRAGPipeline(
         retrievers=[
@@ -39,7 +46,7 @@ def build_real_pipeline(
             config.models.reranker,
             unload_after_score=low_vram,
         ),
-        generator=QwenVLEvidenceGenerator(service),
+        generator=QwenVLEvidenceGenerator(service, unload_after_generate=low_vram),
         recall_top_k=max(
             config.retrieval.sparse_top_k,
             config.retrieval.text_top_k,
@@ -75,6 +82,9 @@ def main() -> None:
         device=args.device,
         low_vram=args.low_vram,
     )
+    print("[Warmup] Loading retrieval models...")
+    pipeline.warmup()
+    print("[Warmup] Retrieval models are ready.")
     create_app(pipeline).run(host=args.host, port=args.port, debug=False)
 
 

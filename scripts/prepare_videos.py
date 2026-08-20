@@ -16,7 +16,7 @@ from video_rag.ingestion import (
 from video_rag.schemas import Keyframe
 from video_rag.storage import save_segments
 
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".ogv", ".avi", ".m4v"}
 
 
 def video_identifier(path: Path) -> str:
@@ -93,4 +93,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

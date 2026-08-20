@@ -44,6 +44,13 @@ class VideoRAGPipeline:
         for retriever in self._retrievers:
             retriever.build(materialized)
 
+    def warmup(self, query: str = "video content") -> None:
+        """Load retrieval models and execute one minimal query before serving traffic."""
+        if not self._segments:
+            raise RuntimeError("Pipeline index is empty; call build() first")
+        for retriever in self._retrievers:
+            retriever.search(query, 1)
+
     def ask(self, query: str) -> Answer:
         query = query.strip()
         if not query:
