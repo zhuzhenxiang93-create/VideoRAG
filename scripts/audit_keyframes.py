@@ -115,19 +115,21 @@ def plan_supplement(segments: list[dict], target_frames: int) -> dict:
             item["segment_id"]
             for item in ordered
             if float(item["start_time"]) <= timestamp < float(item["end_time"])
-            and counts[item["segment_id"]] < target_frames
         ]
-        if not memberships:
-            memberships = [lacking["segment_id"]]
-        candidates.append({"timestamp": timestamp, "segment_ids": memberships})
-        for segment_id in memberships:
+        targeted = [segment_id for segment_id in memberships if counts[segment_id] < target_frames]
+        if not targeted:
+            targeted = [lacking["segment_id"]]
+        candidates.append({"timestamp": timestamp, "segment_ids": memberships, "targeted_segment_ids": targeted})
+        for segment_id in targeted:
             counts[segment_id] += 1
     initial_memberships = sum(len(item.get("keyframes", [])) for item in ordered)
     new_memberships = sum(len(item["segment_ids"]) for item in candidates)
+    target_coverage_gains = sum(len(item["targeted_segment_ids"]) for item in candidates)
     return {
         "target_frames_per_segment": target_frames,
         "new_physical_frames": len(candidates),
         "new_memberships": new_memberships,
+        "target_coverage_gains": target_coverage_gains,
         "overlap_reused_memberships": new_memberships - len(candidates),
         "clip_encodes_required": len(candidates),
         "qwen_vl_calls_required": 0,
@@ -277,6 +279,10 @@ def main() -> None:
             "target_frames_per_segment": target,
             "new_physical_frames": physical,
             "new_memberships": memberships_count,
+            "target_coverage_gains": sum(
+                sum(len(candidate["targeted_segment_ids"]) for candidate in plan["candidate_timestamps"])
+                for plan in plans.values()
+            ),
             "overlap_reused_memberships": memberships_count - physical,
             "clip_encodes_required": physical,
             "qwen_vl_calls_required": 0,

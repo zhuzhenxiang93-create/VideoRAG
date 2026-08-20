@@ -7,8 +7,11 @@ from statistics import mean, median
 from tempfile import TemporaryDirectory
 from time import perf_counter
 
+import numpy as np
+
 from video_rag.config import load_config
 from video_rag.retrieval import ClipVisionRetriever
+from video_rag.retrieval.faiss_dense import normalize_rows, unwrap_model_features
 from video_rag.storage import load_segments
 
 
@@ -43,6 +46,44 @@ def reset_cuda_peak() -> None:
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
+
+
+def component_benchmark(retriever: ClipVisionRetriever, questions: list[str]) -> dict:
+    """Separate CPU preprocessing, GPU text encoding and FAISS search timing."""
+    import torch
+
+    model, processor = retriever._load()
+    preprocessing, encoding, faiss_search = [], [], []
+    for question in questions:
+        started = perf_counter()
+        inputs = processor(text=[question], return_tensors="pt", padding=True).to(retriever.device)
+        preprocessing.append((perf_counter() - started) * 1000)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        started = perf_counter()
+        with torch.inference_mode():
+            values = unwrap_model_features(model.get_text_features(**inputs)).float().cpu().numpy()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        encoding.append((perf_counter() - started) * 1000)
+        vector = normalize_rows(np.asarray(values, dtype=np.float32))
+        started = perf_counter()
+        retriever._index.search(vector, min(20, len(retriever._segment_ids)))
+        faiss_search.append((perf_counter() - started) * 1000)
+
+    def stats(values: list[float]) -> dict:
+        return {
+            "mean": mean(values), "p50": median(values), "p95": percentile(values, .95),
+            "p99": percentile(values, .99), "max": max(values),
+        }
+
+    return {
+        "samples": len(questions),
+        "cpu_processor_ms": stats(preprocessing),
+        "gpu_text_encoder_and_transfer_ms": stats(encoding),
+        "faiss_indexflatip_ms": stats(faiss_search),
+        "clock": "time.perf_counter; CUDA synchronized around GPU component",
+    }
 
 
 def main() -> None:
@@ -85,6 +126,7 @@ def main() -> None:
             retriever.search(question, args.top_k)
             timings.append((perf_counter() - started) * 1000)
     warm_memory = cuda_memory()
+    components = component_benchmark(retriever, questions)
 
     index_path = args.index_dir / "vision_dense_zh.faiss"
     metadata_path = args.index_dir / "vision_dense_zh.json"
@@ -120,6 +162,7 @@ def main() -> None:
             "question_status": "generated_candidate; latency workload only, not accuracy evidence",
             "question_count": len(questions),
             "repeats": args.repeats,
+            "warmup_queries_before_measurement": 1,
             "samples": len(timings),
             "top_k": args.top_k,
             "cold_first_query_ms_including_model_load": cold_ms,
@@ -127,8 +170,11 @@ def main() -> None:
                 "mean": mean(timings),
                 "median": median(timings),
                 "p95": percentile(timings, 0.95),
+                "p99": percentile(timings, 0.99),
                 "max": max(timings),
             },
+            "component_breakdown_single_pass": components,
+            "clock": "time.perf_counter",
             "cold_peak_gpu": cold_memory,
             "warm_peak_gpu": warm_memory,
         },

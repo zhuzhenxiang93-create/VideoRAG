@@ -21,6 +21,8 @@ class Keyframe:
     timestamp: float
     path: str
     caption: str = ""
+    selection_source: str = "scene_change_v1"
+    described_by_vlm: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +63,7 @@ class SearchHit:
     score: float
     source: str
     rank: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,4 +97,3 @@ class Answer:
             "evidence": [item.to_dict() for item in self.evidence],
             "latency_ms": self.latency_ms,
         }
-
