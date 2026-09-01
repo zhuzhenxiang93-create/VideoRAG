@@ -11,6 +11,7 @@ from video_rag.adapters import Qwen3Reranker, Qwen3VLReranker
 from video_rag.config import load_config
 from video_rag.evaluation import evaluate_retrieval
 from video_rag.retrieval import (
+    AdaptiveFusionPolicy,
     BM25Retriever,
     ClipVisionRetriever,
     Qwen3VLEmbeddingRetriever,
@@ -34,6 +35,7 @@ ROUTES = {
     "bm25+clip": ("bm25", "clip"),
     "embedding+clip": ("embedding", "clip"),
     "all_rrf": ("bm25", "embedding", "clip"),
+    "adaptive_rrf": ("bm25", "embedding", "clip"),
 }
 
 
@@ -123,7 +125,10 @@ def main() -> None:
             config.models.clip, device=args.device, index_dir=args.index_dir
         )
     retrievers = {
-        "bm25": BM25Retriever(),
+        "bm25": BM25Retriever(
+            k1=config.retrieval.bm25_k1,
+            b=config.retrieval.bm25_b,
+        ),
         "embedding": QwenTextRetriever(
             config.models.text_embedding, device=args.device, index_dir=args.index_dir
         ),
@@ -132,6 +137,18 @@ def main() -> None:
     for retriever in retrievers.values():
         retriever.build(segments)
         retriever.search("视频内容", 1)
+    fusion_policy = AdaptiveFusionPolicy(
+        sparse_source=retrievers["bm25"].name,
+        text_source=retrievers["embedding"].name,
+        vision_source=retrievers["clip"].name,
+        sparse_weight=config.retrieval.sparse_weight,
+        text_weight=config.retrieval.text_weight,
+        vision_weight=config.retrieval.vision_weight,
+        visual_sparse_weight=config.retrieval.visual_sparse_weight,
+        visual_text_weight=config.retrieval.visual_text_weight,
+        visual_vision_weight=config.retrieval.visual_vision_weight,
+        agreement_bonus=config.retrieval.agreement_bonus,
+    )
 
     predictions = {name: {} for name in ROUTES}
     latency = {name: [] for name in ROUTES}
@@ -152,10 +169,20 @@ def main() -> None:
                     [route_hits[name] for name in component_names],
                     k=config.retrieval.rrf_k,
                     top_k=args.top_k,
+                    source_weights=(
+                        fusion_policy.source_weights(item["question"])
+                        if route_name == "adaptive_rrf"
+                        else None
+                    ),
+                    agreement_bonus=(
+                        fusion_policy.agreement_bonus
+                        if route_name == "adaptive_rrf"
+                        else 0.0
+                    ),
                 )
             predictions[route_name][question_id] = [hit.segment_id for hit in ranked]
             latency[route_name].append(sum(route_latency[name] for name in component_names))
-        all_candidates[question_id] = predictions["all_rrf"][question_id]
+        all_candidates[question_id] = predictions["adaptive_rrf"][question_id]
 
     if args.with_reranker:
         if config.retrieval.reranker_backend == "qwen3_vl":
@@ -168,8 +195,8 @@ def main() -> None:
             )
         else:
             reranker = Qwen3Reranker(config.models.reranker, unload_after_score=args.low_vram)
-        predictions["all_rrf+reranker"] = {}
-        latency["all_rrf+reranker"] = []
+        predictions["adaptive_rrf+reranker"] = {}
+        latency["adaptive_rrf+reranker"] = []
         first_question = questions[0]
         first_candidate = segment_by_id[all_candidates[first_question["question_id"]][0]]
         reranker.score("视频内容", [first_candidate])
@@ -178,14 +205,23 @@ def main() -> None:
             candidates = [segment_by_id[value] for value in all_candidates[question_id]]
             started = perf_counter()
             scores = reranker.score(item["question"], candidates)
-            reranked = sorted(
-                zip(candidates, scores, strict=True), key=lambda pair: pair[1], reverse=True
-            )
-            predictions["all_rrf+reranker"][question_id] = [
-                segment.segment_id for segment, _ in reranked
+            count = len(candidates)
+            blended_scores = [
+                config.retrieval.reranker_weight * score
+                + (1.0 - config.retrieval.reranker_weight)
+                * (1.0 - rank / max(1, count - 1))
+                for rank, score in enumerate(scores)
             ]
-            latency["all_rrf+reranker"].append(
-                latency["all_rrf"][len(latency["all_rrf+reranker"])]
+            reranked = sorted(
+                zip(candidates, scores, blended_scores, strict=True),
+                key=lambda item: item[2],
+                reverse=True,
+            )
+            predictions["adaptive_rrf+reranker"][question_id] = [
+                segment.segment_id for segment, _, _ in reranked
+            ]
+            latency["adaptive_rrf+reranker"].append(
+                latency["adaptive_rrf"][len(latency["adaptive_rrf+reranker"])]
                 + (perf_counter() - started) * 1000
             )
 

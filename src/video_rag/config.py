@@ -16,6 +16,17 @@ class RetrievalConfig:
     sparse_backend: str = "bm25"
     vision_backend: str = "chinese_clip"
     reranker_backend: str = "qwen3_text"
+    bm25_k1: float = 1.2
+    bm25_b: float = 0.0
+    adaptive_fusion: bool = True
+    sparse_weight: float = 1.50
+    text_weight: float = 1.00
+    vision_weight: float = 0.20
+    visual_sparse_weight: float = 1.00
+    visual_text_weight: float = 0.50
+    visual_vision_weight: float = 2.00
+    agreement_bonus: float = 0.05
+    reranker_weight: float = 0.65
     sparse_top_k: int = 20
     text_top_k: int = 20
     vision_top_k: int = 20

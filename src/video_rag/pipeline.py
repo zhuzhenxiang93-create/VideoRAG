@@ -5,6 +5,7 @@ from time import perf_counter
 
 from video_rag.retrieval.base import Generator, Reranker, Retriever
 from video_rag.retrieval.fusion import reciprocal_rank_fusion
+from video_rag.retrieval.routing import AdaptiveFusionPolicy
 from video_rag.schemas import Answer, Evidence, VideoSegment
 
 
@@ -21,6 +22,8 @@ class VideoRAGPipeline:
         rrf_k: int = 60,
         minimum_rerank_score: float = 0.20,
         allow_abstention: bool = True,
+        fusion_policy: AdaptiveFusionPolicy | None = None,
+        reranker_weight: float = 1.0,
     ) -> None:
         if not retrievers:
             raise ValueError("At least one retriever is required")
@@ -38,6 +41,8 @@ class VideoRAGPipeline:
             }
         if min(*recall_top_k_by_name.values(), fusion_top_k, rerank_top_k, rrf_k) <= 0:
             raise ValueError("Top-k and RRF k values must be positive")
+        if not 0 <= reranker_weight <= 1:
+            raise ValueError("reranker_weight must be between 0 and 1")
         self._retrievers = retrievers
         self._reranker = reranker
         self._generator = generator
@@ -47,6 +52,8 @@ class VideoRAGPipeline:
         self._rrf_k = rrf_k
         self._minimum_rerank_score = minimum_rerank_score
         self._allow_abstention = allow_abstention
+        self._fusion_policy = fusion_policy
+        self._reranker_weight = reranker_weight
         self._segments: dict[str, VideoSegment] = {}
 
     def build(self, segments: Iterable[VideoSegment]) -> None:
@@ -82,6 +89,16 @@ class VideoRAGPipeline:
             result_lists,
             k=self._rrf_k,
             top_k=self._fusion_top_k,
+            source_weights=(
+                self._fusion_policy.source_weights(query)
+                if self._fusion_policy is not None
+                else None
+            ),
+            agreement_bonus=(
+                self._fusion_policy.agreement_bonus
+                if self._fusion_policy is not None
+                else 0.0
+            ),
         )
         candidates = [
             self._segments[hit.segment_id]
@@ -97,9 +114,20 @@ class VideoRAGPipeline:
         rerank_scores = self._reranker.score(query, candidates)
         if len(rerank_scores) != len(candidates):
             raise ValueError("Reranker must return one score per candidate")
+        fused_rank_score = {
+            segment.segment_id: 1.0 - rank / max(1, len(candidates) - 1)
+            if len(candidates) > 1
+            else 1.0
+            for rank, segment in enumerate(candidates)
+        }
+        blended = [
+            self._reranker_weight * score
+            + (1.0 - self._reranker_weight) * fused_rank_score[segment.segment_id]
+            for segment, score in zip(candidates, rerank_scores, strict=True)
+        ]
         ranked = sorted(
-            zip(candidates, rerank_scores, strict=True),
-            key=lambda item: (-item[1], -fused_score[item[0].segment_id]),
+            zip(candidates, rerank_scores, blended, strict=True),
+            key=lambda item: (-item[2], -fused_score[item[0].segment_id]),
         )[: self._rerank_top_k]
         reranked_at = perf_counter()
 
@@ -118,7 +146,7 @@ class VideoRAGPipeline:
                 fused_score=fused_score[segment.segment_id],
                 rerank_score=score,
             )
-            for segment, score in ranked
+            for segment, score, _ in ranked
         )
         return Answer(
             answer=answer_text,

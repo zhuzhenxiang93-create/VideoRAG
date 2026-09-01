@@ -15,6 +15,7 @@ from video_rag.config import load_config
 from video_rag.index_manifest import validate_manifest, validate_runtime_manifest
 from video_rag.pipeline import VideoRAGPipeline
 from video_rag.retrieval import (
+    AdaptiveFusionPolicy,
     BM25Retriever,
     ClipVisionRetriever,
     InMemoryLexicalRetriever,
@@ -51,7 +52,7 @@ def build_real_pipeline(
         )
 
     sparse_retriever = (
-        BM25Retriever()
+        BM25Retriever(k1=config.retrieval.bm25_k1, b=config.retrieval.bm25_b)
         if config.retrieval.sparse_backend == "bm25"
         else InMemoryLexicalRetriever()
     )
@@ -126,6 +127,23 @@ def build_real_pipeline(
         rrf_k=config.retrieval.rrf_k,
         minimum_rerank_score=config.generation.minimum_rerank_score,
         allow_abstention=config.generation.allow_abstention,
+        fusion_policy=(
+            AdaptiveFusionPolicy(
+                sparse_source=sparse_retriever.name,
+                text_source="text_dense",
+                vision_source=vision_retriever.name,
+                sparse_weight=config.retrieval.sparse_weight,
+                text_weight=config.retrieval.text_weight,
+                vision_weight=config.retrieval.vision_weight,
+                visual_sparse_weight=config.retrieval.visual_sparse_weight,
+                visual_text_weight=config.retrieval.visual_text_weight,
+                visual_vision_weight=config.retrieval.visual_vision_weight,
+                agreement_bonus=config.retrieval.agreement_bonus,
+            )
+            if config.retrieval.adaptive_fusion
+            else None
+        ),
+        reranker_weight=config.retrieval.reranker_weight,
     )
     pipeline.build(load_segments(segments_path))
     return pipeline
