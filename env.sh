@@ -8,3 +8,4 @@ export TMPDIR=/root/autodl-tmp/cache/tmp
 export PATH=/root/autodl-tmp/envs/videorag/bin:$PATH
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_HUB_DISABLE_XET=1
+export OMP_NUM_THREADS=8

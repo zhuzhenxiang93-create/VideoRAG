@@ -1,6 +1,6 @@
 # VideoRAG：片段级中文多模态视频问答
 
-一个可复现的片段级 VideoRAG 系统：将视频转成带时间戳的 ASR、关键帧和视觉描述，使用稀疏、文本向量和图文向量三路召回，经 RRF 融合与 Qwen3-Reranker 精排后，由 Qwen2.5-VL 基于 Top-K 证据生成答案。API 同时返回证据片段、时间范围和阶段延迟，前端可以直接跳转到对应视频位置。
+一个可复现的片段级 VideoRAG 系统：将视频转成带时间戳的 ASR、关键帧和视觉描述，通过查询意图路由选择稀疏、文本向量和图文向量召回，经加权 RRF 后由 Qwen-VL 基于 Top-K 证据生成答案。API 同时返回证据片段、时间范围和阶段延迟，前端可以直接跳转到对应视频位置。
 
 > 当前状态：核心流水线、索引校验、帧级检索实验、评测工具和人工复核系统均已实现；仓库中的问题集仍是自动生成候选集，尚不能把诊断指标当作正式人工测试集结果。
 
@@ -13,14 +13,18 @@
                                                      ▼
                                   20 秒窗口、5 秒重叠的视频片段
                                                      │
-             ┌───────────────────┬───────────────────┴───────────────────┐
+                                         查询意图路由
+                          ┌───────────────┴────────────────┐
+                       事实问题                          视觉问题
+                          │                                │
+             ┌────────────┴──────┬─────────────────────────┴─────────────┐
              ▼                   ▼                                       ▼
        Okapi BM25 稀疏召回  Qwen3-Embedding + FAISS        Chinese-CLIP + FAISS
              └───────────────────┴───────────────────┬───────────────────┘
                                                      ▼
-                                               RRF 排名融合
+                                          查询自适应加权 RRF
                                                      ▼
-                                           Qwen3-Reranker 精排
+                                   可选 Qwen3-VL 多模态精排
                                                      ▼
                                       Qwen2.5-VL 证据约束生成
                                                      ▼
@@ -33,9 +37,10 @@
 - Whisper 保留 ASR 片段时间戳，并与 20 秒滑动窗口自动对齐。
 - 每秒采样视频，结合场景变化、Laplacian 清晰度和时间去重选择关键帧。
 - Qwen2.5-VL 生成客观关键帧描述，并基于最终证据完成一次性多模态生成。
-- 标准 Okapi BM25（含文档长度归一化）、Qwen3-Embedding、Chinese-CLIP 三路召回，使用 RRF 避免异构分数直接标定。
+- 可配置 Okapi BM25、Qwen3-Embedding、Chinese-CLIP 三路召回；针对固定时长重叠片段，默认 `b=0`，避免长 ASR 片段被过度惩罚。
 - 三路召回分别使用 `sparse_top_k`、`text_top_k` 和 `vision_top_k`，便于独立调参与消融。
-- Qwen3-Reranker 对融合候选精排，低于置信度阈值时拒答。
+- 查询路由使事实题只运行稀疏检索，明确视觉问题才启动视觉分支；加权 RRF 支持跨模态一致性奖励。
+- 实测文本 Qwen3-Reranker 在当前诊断集产生负收益，因此默认保留融合排序；Qwen3-VL 多模态精排作为可选升级。
 - 可选 Qwen3-VL-Embedding、Qwen3-VL-Reranker 和 Qwen3-VL 生成端到端升级路径；旧模型配置仍可直接运行。
 - 所有向量转为 L2 归一化 `float32`，使用 FAISS `IndexFlatIP` 实现余弦相似度精确检索。
 - 索引 manifest 记录模型、维度、条目数、相似度定义和文件 SHA-256，启动时拒绝不一致索引。
@@ -50,15 +55,15 @@
 | ASR | `openai/whisper-small` |
 | 文本向量 | `Qwen/Qwen3-Embedding-0.6B` |
 | 中文图文向量 | `OFA-Sys/chinese-clip-vit-base-patch16` |
-| 候选精排 | `Qwen/Qwen3-Reranker-0.6B` |
+| 候选精排 | 默认保持融合排序；可选 `Qwen/Qwen3-Reranker-0.6B` |
 | 视觉描述与答案生成 | `Qwen/Qwen2.5-VL-7B-Instruct` |
 
 配置集中在 [`config.toml`](config.toml)。
 
 仓库提供两套可切换配置：
 
-- `config.toml`：兼容模式，采用 BM25 + Qwen3 文本向量 + Chinese-CLIP + 文本 Reranker + Qwen2.5-VL。
-- `config.qwen3-vl.toml`：升级模式，视觉召回和精排都联合使用片段文本与有序关键帧，并由 Qwen3-VL 对关键帧序列生成答案。
+- `config.toml`：实测稳定模式，采用查询路由 + BM25/Chinese-CLIP + 加权 RRF + Qwen2.5-VL。
+- `config.qwen3-vl.toml`：升级模式，事实题保留低延迟 BM25 路径，视觉题才用片段文本与有序关键帧进行 Qwen3-VL 召回和精排，并由 Qwen3-VL 对关键帧序列生成答案。
 
 ## 项目结构
 
