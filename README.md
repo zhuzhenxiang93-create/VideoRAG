@@ -106,6 +106,8 @@ python -m pip install -e ".[models,video,ocr]"
 python scripts/prepare_videos.py --input data/raw --output artifacts/segments.semantic.jsonl
 ```
 
+OCR 依赖固定使用 PaddlePaddle 3.2.2；3.3.x 的 CPU oneDNN/PIR 推理路径存在上游兼容问题。
+
 已有片段可只补OCR而不重复运行ASR和视觉描述：
 
 ```bash

@@ -34,7 +34,9 @@ video = [
 ]
 ocr = [
   "paddleocr>=3.0,<4",
-  "paddlepaddle>=3.0,<4",
+  # PaddlePaddle 3.3.x CPU inference currently fails in PaddleOCR/PaddleX's
+  # oneDNN path; keep the last known-good 3.2 release until upstream fixes it.
+  "paddlepaddle==3.2.2",
 ]
 dev = [
   "pytest>=8.0",
