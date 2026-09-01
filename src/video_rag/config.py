@@ -15,18 +15,18 @@ class SegmentationConfig:
 class RetrievalConfig:
     sparse_backend: str = "bm25"
     vision_backend: str = "chinese_clip"
-    reranker_backend: str = "qwen3_text"
+    reranker_backend: str = "fusion_only"
     bm25_k1: float = 1.2
     bm25_b: float = 0.0
     adaptive_fusion: bool = True
-    sparse_weight: float = 1.50
-    text_weight: float = 1.00
-    vision_weight: float = 0.20
+    sparse_weight: float = 1.00
+    text_weight: float = 0.00
+    vision_weight: float = 0.00
     visual_sparse_weight: float = 1.00
-    visual_text_weight: float = 0.50
+    visual_text_weight: float = 0.00
     visual_vision_weight: float = 2.00
     agreement_bonus: float = 0.05
-    reranker_weight: float = 0.65
+    reranker_weight: float = 0.00
     sparse_top_k: int = 20
     text_top_k: int = 20
     vision_top_k: int = 20
@@ -87,7 +87,7 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         "retrieval.reranker_backend": (
             config.retrieval.reranker_backend,
-            {"qwen3_text", "qwen3_vl"},
+            {"fusion_only", "qwen3_text", "qwen3_vl"},
         ),
         "generation.backend": (
             config.generation.backend,

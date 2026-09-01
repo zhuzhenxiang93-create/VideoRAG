@@ -27,7 +27,7 @@ def test_visual_intent_detection(query):
 def test_audio_fact_question_prefers_sparse_and_text_routes():
     weights = policy().source_weights("完善选举制度要落实什么原则？")
 
-    assert weights["bm25"] > weights["text"] > weights["vision"]
+    assert weights == {"bm25": 1.0, "text": 0.0, "vision": 0.0}
 
 
 def test_visual_question_prefers_vision_route():

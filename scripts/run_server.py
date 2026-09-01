@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from video_rag.adapters import (
+    FusionOrderReranker,
     Qwen3Reranker,
     Qwen3VLReranker,
     Qwen3VLService,
@@ -75,7 +76,9 @@ def build_real_pipeline(
             index_dir=index_dir,
         )
 
-    if config.retrieval.reranker_backend == "qwen3_vl":
+    if config.retrieval.reranker_backend == "fusion_only":
+        reranker = FusionOrderReranker()
+    elif config.retrieval.reranker_backend == "qwen3_vl":
         if not config.models.qwen3_vl_repository:
             raise ValueError(
                 "models.qwen3_vl_repository is required when reranker_backend='qwen3_vl'"

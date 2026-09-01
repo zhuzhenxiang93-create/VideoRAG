@@ -18,6 +18,16 @@ class TokenOverlapReranker:
         return scores
 
 
+class FusionOrderReranker:
+    """No-model reranker that preserves the order produced by retrieval fusion."""
+
+    def score(self, query: str, segments: list[VideoSegment]) -> list[float]:
+        if not segments:
+            return []
+        denominator = max(1, len(segments) - 1)
+        return [1.0 - index / denominator for index in range(len(segments))]
+
+
 class EvidenceGenerator:
     """Deterministic local generator that makes the pipeline testable without a GPU."""
 
@@ -30,4 +40,3 @@ class EvidenceGenerator:
         if not content:
             return "根据当前视频内容无法确定。"
         return f"{content}（证据：{evidence.segment_id}，{evidence.start_time:.1f}–{evidence.end_time:.1f}秒）"
-

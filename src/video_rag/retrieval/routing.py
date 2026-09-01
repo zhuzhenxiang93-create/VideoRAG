@@ -19,11 +19,11 @@ class AdaptiveFusionPolicy:
     sparse_source: str
     text_source: str
     vision_source: str
-    sparse_weight: float = 1.50
-    text_weight: float = 1.00
-    vision_weight: float = 0.20
+    sparse_weight: float = 1.00
+    text_weight: float = 0.00
+    vision_weight: float = 0.00
     visual_sparse_weight: float = 1.00
-    visual_text_weight: float = 0.50
+    visual_text_weight: float = 0.00
     visual_vision_weight: float = 2.00
     agreement_bonus: float = 0.05
     visual_patterns: tuple[str, ...] = field(default=DEFAULT_VISUAL_PATTERNS)
@@ -39,6 +39,8 @@ class AdaptiveFusionPolicy:
         )
         if any(weight < 0 for weight in weights):
             raise ValueError("Adaptive fusion weights must be non-negative")
+        if sum(weights[:3]) <= 0 or sum(weights[3:]) <= 0:
+            raise ValueError("Each adaptive fusion route must enable at least one source")
         if self.agreement_bonus < 0:
             raise ValueError("agreement_bonus must be non-negative")
 

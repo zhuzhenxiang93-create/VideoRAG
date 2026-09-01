@@ -7,7 +7,7 @@ from pathlib import Path
 from statistics import mean, median
 from time import perf_counter
 
-from video_rag.adapters import Qwen3Reranker, Qwen3VLReranker
+from video_rag.adapters import FusionOrderReranker, Qwen3Reranker, Qwen3VLReranker
 from video_rag.config import load_config
 from video_rag.evaluation import evaluate_retrieval
 from video_rag.retrieval import (
@@ -162,18 +162,28 @@ def main() -> None:
             route_hits[name] = retriever.search(item["question"], args.top_k)
             route_latency[name] = (perf_counter() - started) * 1000
         for route_name, component_names in ROUTES.items():
+            source_weights = (
+                fusion_policy.source_weights(item["question"])
+                if route_name == "adaptive_rrf"
+                else None
+            )
+            active_names = (
+                tuple(
+                    name
+                    for name in component_names
+                    if source_weights.get(retrievers[name].name, 1.0) > 0
+                )
+                if source_weights is not None
+                else component_names
+            )
             if len(component_names) == 1:
                 ranked = route_hits[component_names[0]]
             else:
                 ranked = reciprocal_rank_fusion(
-                    [route_hits[name] for name in component_names],
+                    [route_hits[name] for name in active_names],
                     k=config.retrieval.rrf_k,
                     top_k=args.top_k,
-                    source_weights=(
-                        fusion_policy.source_weights(item["question"])
-                        if route_name == "adaptive_rrf"
-                        else None
-                    ),
+                    source_weights=source_weights,
                     agreement_bonus=(
                         fusion_policy.agreement_bonus
                         if route_name == "adaptive_rrf"
@@ -181,11 +191,13 @@ def main() -> None:
                     ),
                 )
             predictions[route_name][question_id] = [hit.segment_id for hit in ranked]
-            latency[route_name].append(sum(route_latency[name] for name in component_names))
+            latency[route_name].append(sum(route_latency[name] for name in active_names))
         all_candidates[question_id] = predictions["adaptive_rrf"][question_id]
 
     if args.with_reranker:
-        if config.retrieval.reranker_backend == "qwen3_vl":
+        if config.retrieval.reranker_backend == "fusion_only":
+            reranker = FusionOrderReranker()
+        elif config.retrieval.reranker_backend == "qwen3_vl":
             reranker = Qwen3VLReranker(
                 config.models.qwen3_vl_reranker,
                 implementation_repository=config.models.qwen3_vl_repository,

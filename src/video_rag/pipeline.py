@@ -80,20 +80,22 @@ class VideoRAGPipeline:
             raise RuntimeError("Pipeline index is empty; call build() first")
 
         started = perf_counter()
+        source_weights = (
+            self._fusion_policy.source_weights(query)
+            if self._fusion_policy is not None
+            else None
+        )
         result_lists = [
             retriever.search(query, self._recall_top_k_by_name[retriever.name])
             for retriever in self._retrievers
+            if source_weights is None or source_weights.get(retriever.name, 1.0) > 0
         ]
         recalled_at = perf_counter()
         fused = reciprocal_rank_fusion(
             result_lists,
             k=self._rrf_k,
             top_k=self._fusion_top_k,
-            source_weights=(
-                self._fusion_policy.source_weights(query)
-                if self._fusion_policy is not None
-                else None
-            ),
+            source_weights=source_weights,
             agreement_bonus=(
                 self._fusion_policy.agreement_bonus
                 if self._fusion_policy is not None

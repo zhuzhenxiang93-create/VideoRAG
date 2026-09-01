@@ -3,6 +3,7 @@ import unittest
 from video_rag.adapters import EvidenceGenerator, TokenOverlapReranker
 from video_rag.pipeline import VideoRAGPipeline
 from video_rag.retrieval import InMemoryLexicalRetriever
+from video_rag.retrieval.routing import AdaptiveFusionPolicy
 from video_rag.schemas import SearchHit, VideoSegment
 
 
@@ -89,3 +90,29 @@ class PipelineTests(unittest.TestCase):
         result = pipeline.ask("飞机在哪里降落")
 
         self.assertFalse(result.abstained)
+
+    def test_adaptive_policy_skips_disabled_retrieval_routes(self):
+        sparse = RecordingRetriever("sparse")
+        text = RecordingRetriever("text")
+        vision = RecordingRetriever("vision")
+        policy = AdaptiveFusionPolicy(
+            sparse_source="sparse",
+            text_source="text",
+            vision_source="vision",
+        )
+        pipeline = VideoRAGPipeline(
+            retrievers=[sparse, text, vision],
+            reranker=TokenOverlapReranker(),
+            generator=EvidenceGenerator(),
+            fusion_policy=policy,
+            minimum_rerank_score=0,
+        )
+        pipeline.build(
+            [VideoSegment("s1", "v1", "v1.mp4", 0, 10, transcript="选举原则")]
+        )
+
+        pipeline.ask("要落实什么原则？")
+
+        self.assertEqual(sparse.top_k, 20)
+        self.assertIsNone(text.top_k)
+        self.assertIsNone(vision.top_k)
