@@ -116,6 +116,21 @@ python scripts/enrich_ocr.py \
   --output artifacts/segments.ocr.jsonl
 ```
 
+默认配置的既有向量不包含 OCR，因而向量值无需重算；复制索引并更新片段哈希后即可启用独立 OCR 召回：
+
+```bash
+cp -a artifacts/indexes artifacts/indexes-ocr
+python scripts/refresh_index_manifest.py \
+  --segments artifacts/segments.ocr.jsonl \
+  --index-dir artifacts/indexes-ocr
+python scripts/run_server.py \
+  --segments artifacts/segments.ocr.jsonl \
+  --index-dir artifacts/indexes-ocr \
+  --low-vram
+```
+
+若使用 `config.qwen3-vl.toml`，多模态向量会读取 OCR 证据文本，应改用 `build_indexes.py` 为 `segments.ocr.jsonl` 完整重建新索引。
+
 示例请求：
 
 ```bash
