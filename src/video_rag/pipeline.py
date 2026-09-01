@@ -4,9 +4,10 @@ from collections.abc import Iterable, Mapping
 from time import perf_counter
 
 from video_rag.retrieval.base import Generator, Reranker, Retriever
+from video_rag.retrieval.cascade import ordered_candidate_union, requires_fallback
 from video_rag.retrieval.fusion import reciprocal_rank_fusion
-from video_rag.retrieval.routing import AdaptiveFusionPolicy
-from video_rag.schemas import Answer, Evidence, GeneratedAnswer, VideoSegment
+from video_rag.retrieval.routing import AdaptiveFusionPolicy, RoutingDecision
+from video_rag.schemas import Answer, Evidence, GeneratedAnswer, SearchHit, VideoSegment
 
 
 class VideoRAGPipeline:
@@ -25,6 +26,10 @@ class VideoRAGPipeline:
         allow_abstention: bool = True,
         require_citations: bool = True,
         fusion_policy: AdaptiveFusionPolicy | None = None,
+        retrieval_strategy: str = "rrf",
+        primary_minimum_scores: Mapping[str, float] | None = None,
+        minimum_route_confidence: float = 0.0,
+        minimum_primary_score_margin: float = 0.0,
         reranker_weight: float = 1.0,
         neighbor_hops: int = 1,
         temporal_neighbor_hops: int = 2,
@@ -49,6 +54,12 @@ class VideoRAGPipeline:
             raise ValueError("Top-k and RRF k values must be positive")
         if not 0 <= reranker_weight <= 1:
             raise ValueError("reranker_weight must be between 0 and 1")
+        if retrieval_strategy not in {"cascade", "rrf"}:
+            raise ValueError("retrieval_strategy must be 'cascade' or 'rrf'")
+        if not 0 <= minimum_route_confidence <= 1:
+            raise ValueError("minimum_route_confidence must be between 0 and 1")
+        if not 0 <= minimum_primary_score_margin <= 1:
+            raise ValueError("minimum_primary_score_margin must be between 0 and 1")
         if not 0 <= minimum_generator_confidence <= 1:
             raise ValueError("minimum_generator_confidence must be between 0 and 1")
         if min(neighbor_hops, temporal_neighbor_hops) < 0:
@@ -69,6 +80,10 @@ class VideoRAGPipeline:
         self._allow_abstention = allow_abstention
         self._require_citations = require_citations
         self._fusion_policy = fusion_policy
+        self._retrieval_strategy = retrieval_strategy
+        self._primary_minimum_scores = dict(primary_minimum_scores or {})
+        self._minimum_route_confidence = minimum_route_confidence
+        self._minimum_primary_score_margin = minimum_primary_score_margin
         self._reranker_weight = reranker_weight
         self._neighbor_hops = neighbor_hops
         self._temporal_neighbor_hops = temporal_neighbor_hops
@@ -107,31 +122,15 @@ class VideoRAGPipeline:
 
         started = perf_counter()
         decision = self._fusion_policy.decision(query) if self._fusion_policy else None
-        source_weights = decision.source_weights if decision else None
         route_labels = decision.labels if decision else ("text",)
-        result_lists = [
-            retriever.search(query, self._recall_top_k_by_name[retriever.name])
-            for retriever in self._retrievers
-            if source_weights is None or source_weights.get(retriever.name, 1.0) > 0
-        ]
+        selected_hits = self._retrieve(query, decision)
         recalled_at = perf_counter()
-        fused = reciprocal_rank_fusion(
-            result_lists,
-            k=self._rrf_k,
-            top_k=self._fusion_top_k,
-            source_weights=source_weights,
-            agreement_bonus=(
-                self._fusion_policy.agreement_bonus
-                if self._fusion_policy is not None
-                else 0.0
-            ),
-        )
         candidates = self._deduplicate_candidates([
             self._segments[hit.segment_id]
-            for hit in fused
+            for hit in selected_hits
             if hit.segment_id in self._segments
         ])
-        fused_score = {hit.segment_id: hit.score for hit in fused}
+        retrieval_score = {hit.segment_id: hit.score for hit in selected_hits}
         fused_at = perf_counter()
 
         if not candidates:
@@ -155,7 +154,7 @@ class VideoRAGPipeline:
         ]
         ranked = sorted(
             zip(candidates, rerank_scores, blended, strict=True),
-            key=lambda item: (-item[2], -fused_score[item[0].segment_id]),
+            key=lambda item: (-item[2], -retrieval_score[item[0].segment_id]),
         )[: self._rerank_top_k]
         reranked_at = perf_counter()
 
@@ -204,7 +203,7 @@ class VideoRAGPipeline:
         evidence = tuple(
             Evidence(
                 segment=self._segments[segment_id],
-                fused_score=fused_score.get(segment_id, 0.0),
+                fused_score=retrieval_score.get(segment_id, 0.0),
                 rerank_score=rerank_score.get(segment_id, 0.0),
             )
             for segment_id in evidence_ids
@@ -223,6 +222,75 @@ class VideoRAGPipeline:
                 "generation": (finished - reranked_at) * 1000,
                 "total": (finished - started) * 1000,
             },
+        )
+
+    def _retrieve(
+        self, query: str, decision: RoutingDecision | None
+    ) -> list[SearchHit]:
+        retrievers = {retriever.name: retriever for retriever in self._retrievers}
+        if self._retrieval_strategy == "rrf":
+            source_weights = decision.source_weights if decision else None
+            result_lists = [
+                retriever.search(query, self._recall_top_k_by_name[retriever.name])
+                for retriever in self._retrievers
+                if source_weights is None
+                or source_weights.get(retriever.name, 1.0) > 0
+            ]
+            return reciprocal_rank_fusion(
+                result_lists,
+                k=self._rrf_k,
+                top_k=self._fusion_top_k,
+                source_weights=source_weights,
+                agreement_bonus=(
+                    self._fusion_policy.agreement_bonus
+                    if self._fusion_policy is not None
+                    else 0.0
+                ),
+            )
+
+        primary_names = (
+            tuple(name for name in decision.primary_sources if name in retrievers)
+            if decision is not None
+            else tuple(retrievers)
+        )
+        if not primary_names:
+            primary_names = tuple(retrievers)
+        primary_lists = [
+            retrievers[name].search(query, self._recall_top_k_by_name[name])
+            for name in primary_names
+        ]
+        selected_lists = list(primary_lists)
+        candidate_mode = decision.candidate_mode if decision is not None else "union"
+        fallback_names = (
+            tuple(name for name in decision.fallback_sources if name in retrievers)
+            if decision is not None
+            else ()
+        )
+        if (
+            candidate_mode == "cascade"
+            and len(primary_names) == 1
+            and fallback_names
+            and requires_fallback(
+                primary_lists[0],
+                source=primary_names[0],
+                minimum_scores=self._primary_minimum_scores,
+                route_confidence=decision.confidence if decision is not None else 1.0,
+                minimum_route_confidence=self._minimum_route_confidence,
+                minimum_score_margin=self._minimum_primary_score_margin,
+            )
+        ):
+            fallback_lists = [
+                retrievers[name].search(query, self._recall_top_k_by_name[name])
+                for name in fallback_names
+            ]
+            # Once the primary route fails its confidence gate, the fallback is
+            # promoted ahead of the weak primary list. A real reranker may still
+            # recover any useful primary evidence from the combined candidates.
+            selected_lists = fallback_lists + primary_lists
+        return ordered_candidate_union(
+            selected_lists,
+            top_k=self._fusion_top_k,
+            interleave=candidate_mode == "union",
         )
 
     @staticmethod
@@ -263,7 +331,7 @@ class VideoRAGPipeline:
             if "temporal" in route_labels
             else self._neighbor_hops
         )
-        selected: dict[str, VideoSegment] = {item.segment_id: item for item in anchors}
+        selected: dict[str, VideoSegment] = {}
         for anchor in anchors:
             video_segments = self._segments_by_video.get(anchor.video_id, [])
             anchor_index = next(
@@ -275,10 +343,7 @@ class VideoRAGPipeline:
             upper = min(len(video_segments), anchor_index + hops + 1)
             for segment in video_segments[lower:upper]:
                 selected.setdefault(segment.segment_id, segment)
-        return sorted(
-            selected.values(),
-            key=lambda item: (item.video_id, item.start_time, item.end_time),
-        )[: self._max_generation_segments]
+        return list(selected.values())[: self._max_generation_segments]
 
     @staticmethod
     def _coerce_generated_answer(

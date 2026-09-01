@@ -24,6 +24,7 @@ class OCRConfig:
 
 @dataclass(frozen=True, slots=True)
 class RetrievalConfig:
+    strategy: str = "cascade"
     sparse_backend: str = "bm25"
     vision_backend: str = "chinese_clip"
     reranker_backend: str = "fusion_only"
@@ -37,7 +38,7 @@ class RetrievalConfig:
     visual_sparse_weight: float = 1.00
     visual_text_weight: float = 0.00
     visual_vision_weight: float = 2.00
-    visual_ocr_weight: float = 0.25
+    visual_ocr_weight: float = 0.0
     ocr_query_sparse_weight: float = 0.50
     ocr_query_text_weight: float = 0.00
     ocr_query_vision_weight: float = 0.50
@@ -51,6 +52,12 @@ class RetrievalConfig:
     fusion_top_k: int = 20
     rerank_top_k: int = 3
     rrf_k: int = 60
+    minimum_route_confidence: float = 0.70
+    minimum_primary_score_margin: float = 0.0
+    sparse_primary_min_score: float = 0.0
+    text_primary_min_score: float = 0.20
+    vision_primary_min_score: float = 0.20
+    ocr_primary_min_score: float = 0.0
     neighbor_hops: int = 1
     temporal_neighbor_hops: int = 2
     dedupe_overlap_ratio: float = 0.20
@@ -112,6 +119,10 @@ def load_config(path: str | Path) -> AppConfig:
             config.retrieval.sparse_backend,
             {"bm25", "bm25_like"},
         ),
+        "retrieval.strategy": (
+            config.retrieval.strategy,
+            {"cascade", "rrf"},
+        ),
         "retrieval.vision_backend": (
             config.retrieval.vision_backend,
             {"chinese_clip", "qwen3_vl"},
@@ -145,6 +156,10 @@ def load_config(path: str | Path) -> AppConfig:
         raise ValueError("segmentation overlap must satisfy 0 <= overlap < minimum")
     if not 0 <= config.retrieval.dedupe_overlap_ratio <= 1:
         raise ValueError("retrieval.dedupe_overlap_ratio must be between 0 and 1")
+    if not 0 <= config.retrieval.minimum_route_confidence <= 1:
+        raise ValueError("retrieval.minimum_route_confidence must be between 0 and 1")
+    if not 0 <= config.retrieval.minimum_primary_score_margin <= 1:
+        raise ValueError("retrieval.minimum_primary_score_margin must be between 0 and 1")
     if min(
         config.retrieval.neighbor_hops,
         config.retrieval.temporal_neighbor_hops,

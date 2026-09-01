@@ -144,6 +144,19 @@ def build_real_pipeline(
         minimum_generator_confidence=config.generation.minimum_generator_confidence,
         allow_abstention=config.generation.allow_abstention,
         require_citations=config.generation.require_citations,
+        retrieval_strategy=config.retrieval.strategy,
+        primary_minimum_scores={
+            sparse_retriever.name: config.retrieval.sparse_primary_min_score,
+            "text_dense": config.retrieval.text_primary_min_score,
+            vision_retriever.name: config.retrieval.vision_primary_min_score,
+            **(
+                {ocr_retriever.name: config.retrieval.ocr_primary_min_score}
+                if ocr_retriever is not None
+                else {}
+            ),
+        },
+        minimum_route_confidence=config.retrieval.minimum_route_confidence,
+        minimum_primary_score_margin=config.retrieval.minimum_primary_score_margin,
         fusion_policy=(
             AdaptiveFusionPolicy(
                 sparse_source=sparse_retriever.name,
@@ -164,7 +177,10 @@ def build_real_pipeline(
                 ocr_query_ocr_weight=config.retrieval.ocr_query_ocr_weight,
                 agreement_bonus=config.retrieval.agreement_bonus,
             )
-            if config.retrieval.adaptive_fusion
+            if (
+                config.retrieval.adaptive_fusion
+                or config.retrieval.strategy == "cascade"
+            )
             else None
         ),
         reranker_weight=config.retrieval.reranker_weight,

@@ -38,6 +38,24 @@ class StaticRetriever:
         ]
 
 
+class ScoredRecordingRetriever:
+    def __init__(self, name, results):
+        self.name = name
+        self.results = results
+        self.calls = 0
+
+    def build(self, segments):
+        del segments
+
+    def search(self, query, top_k):
+        del query
+        self.calls += 1
+        return [
+            SearchHit(segment_id, score, self.name, rank)
+            for rank, (segment_id, score) in enumerate(self.results[:top_k], start=1)
+        ]
+
+
 class CapturingGenerator:
     def __init__(self, result=None):
         self.segment_ids = []
@@ -222,3 +240,81 @@ class PipelineTests(unittest.TestCase):
         )
 
         self.assertFalse(pipeline.ask("证据").abstained)
+
+    def test_cascade_does_not_run_fallback_when_primary_is_confident(self):
+        sparse = ScoredRecordingRetriever("sparse", [("s1", 2.0)])
+        text = ScoredRecordingRetriever("text", [("s2", 0.8)])
+        policy = AdaptiveFusionPolicy("sparse", "text", "vision")
+        pipeline = VideoRAGPipeline(
+            retrievers=[sparse, text],
+            reranker=FusionOrderReranker(),
+            generator=CapturingGenerator(),
+            fusion_policy=policy,
+            retrieval_strategy="cascade",
+            primary_minimum_scores={"sparse": 1.0},
+            neighbor_hops=0,
+        )
+        pipeline.build(
+            [
+                VideoSegment("s1", "v1", "v1.mp4", 0, 10, transcript="原则"),
+                VideoSegment("s2", "v2", "v2.mp4", 0, 10, transcript="其他"),
+            ]
+        )
+
+        pipeline.ask("要落实什么原则？")
+
+        self.assertEqual(sparse.calls, 1)
+        self.assertEqual(text.calls, 0)
+
+    def test_cascade_runs_fallback_for_low_primary_score(self):
+        sparse = ScoredRecordingRetriever("sparse", [("s1", 0.2)])
+        text = ScoredRecordingRetriever("text", [("s2", 0.8)])
+        policy = AdaptiveFusionPolicy("sparse", "text", "vision")
+        generator = CapturingGenerator()
+        pipeline = VideoRAGPipeline(
+            retrievers=[sparse, text],
+            reranker=FusionOrderReranker(),
+            generator=generator,
+            fusion_policy=policy,
+            retrieval_strategy="cascade",
+            primary_minimum_scores={"sparse": 1.0},
+            rerank_top_k=2,
+            neighbor_hops=0,
+        )
+        pipeline.build(
+            [
+                VideoSegment("s1", "v1", "v1.mp4", 0, 10, transcript="弱匹配"),
+                VideoSegment("s2", "v2", "v2.mp4", 0, 10, transcript="补充证据"),
+            ]
+        )
+
+        pipeline.ask("要落实什么原则？")
+
+        self.assertEqual(text.calls, 1)
+        self.assertEqual(generator.segment_ids, ["s2", "s1"])
+
+    def test_multimodal_cascade_interleaves_candidate_union(self):
+        sparse = ScoredRecordingRetriever("sparse", [("s1", 4.0), ("s2", 3.0)])
+        text = ScoredRecordingRetriever("text", [("s3", 0.9)])
+        vision = ScoredRecordingRetriever("vision", [("s4", 0.8)])
+        policy = AdaptiveFusionPolicy("sparse", "text", "vision")
+        generator = CapturingGenerator()
+        pipeline = VideoRAGPipeline(
+            retrievers=[sparse, text, vision],
+            reranker=FusionOrderReranker(),
+            generator=generator,
+            fusion_policy=policy,
+            retrieval_strategy="cascade",
+            rerank_top_k=4,
+            neighbor_hops=0,
+        )
+        pipeline.build(
+            [
+                VideoSegment(f"s{index}", f"v{index}", f"v{index}.mp4", 0, 10)
+                for index in range(1, 5)
+            ]
+        )
+
+        pipeline.ask("结合画面和解说，表达了什么？")
+
+        self.assertEqual(generator.segment_ids, ["s1", "s3", "s4", "s2"])

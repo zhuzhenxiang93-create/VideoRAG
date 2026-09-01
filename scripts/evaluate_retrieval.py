@@ -17,7 +17,9 @@ from video_rag.retrieval import (
     OCRBM25Retriever,
     Qwen3VLEmbeddingRetriever,
     QwenTextRetriever,
+    ordered_candidate_union,
     reciprocal_rank_fusion,
+    requires_fallback,
 )
 from video_rag.storage import load_segments
 
@@ -40,6 +42,7 @@ ROUTES = {
     "all_rrf": ("bm25", "embedding", "clip"),
     "all_multimodal_rrf": ("bm25", "embedding", "clip", "ocr"),
     "adaptive_rrf": ("bm25", "embedding", "clip", "ocr"),
+    "cascade": (),
 }
 
 
@@ -164,6 +167,15 @@ def main() -> None:
         ocr_query_ocr_weight=config.retrieval.ocr_query_ocr_weight,
         agreement_bonus=config.retrieval.agreement_bonus,
     )
+    route_name_by_source = {
+        retriever.name: name for name, retriever in retrievers.items()
+    }
+    primary_minimum_scores = {
+        retrievers["bm25"].name: config.retrieval.sparse_primary_min_score,
+        retrievers["embedding"].name: config.retrieval.text_primary_min_score,
+        retrievers["clip"].name: config.retrieval.vision_primary_min_score,
+        retrievers["ocr"].name: config.retrieval.ocr_primary_min_score,
+    }
 
     predictions = {name: {} for name in ROUTES}
     latency = {name: [] for name in ROUTES}
@@ -177,6 +189,54 @@ def main() -> None:
             route_hits[name] = retriever.search(item["question"], args.top_k)
             route_latency[name] = (perf_counter() - started) * 1000
         for route_name, component_names in ROUTES.items():
+            if route_name == "cascade":
+                decision = fusion_policy.decision(item["question"])
+                primary_names = tuple(
+                    route_name_by_source[source]
+                    for source in decision.primary_sources
+                    if source in route_name_by_source
+                )
+                primary_lists = [route_hits[name] for name in primary_names]
+                active_names = primary_names
+                selected_lists = list(primary_lists)
+                if (
+                    decision.candidate_mode == "cascade"
+                    and len(primary_names) == 1
+                    and decision.fallback_sources
+                    and requires_fallback(
+                        primary_lists[0],
+                        source=decision.primary_sources[0],
+                        minimum_scores=primary_minimum_scores,
+                        route_confidence=decision.confidence,
+                        minimum_route_confidence=(
+                            config.retrieval.minimum_route_confidence
+                        ),
+                        minimum_score_margin=(
+                            config.retrieval.minimum_primary_score_margin
+                        ),
+                    )
+                ):
+                    fallback_names = tuple(
+                        route_name_by_source[source]
+                        for source in decision.fallback_sources
+                        if source in route_name_by_source
+                    )
+                    selected_lists = (
+                        [route_hits[name] for name in fallback_names] + selected_lists
+                    )
+                    active_names = fallback_names + active_names
+                ranked = ordered_candidate_union(
+                    selected_lists,
+                    top_k=args.top_k,
+                    interleave=decision.candidate_mode == "union",
+                )
+                predictions[route_name][question_id] = [
+                    hit.segment_id for hit in ranked
+                ]
+                latency[route_name].append(
+                    sum(route_latency[name] for name in active_names)
+                )
+                continue
             source_weights = (
                 fusion_policy.source_weights(item["question"])
                 if route_name == "adaptive_rrf"
@@ -207,7 +267,7 @@ def main() -> None:
                 )
             predictions[route_name][question_id] = [hit.segment_id for hit in ranked]
             latency[route_name].append(sum(route_latency[name] for name in active_names))
-        all_candidates[question_id] = predictions["adaptive_rrf"][question_id]
+        all_candidates[question_id] = predictions["cascade"][question_id]
 
     if args.with_reranker:
         if config.retrieval.reranker_backend == "fusion_only":
@@ -222,8 +282,8 @@ def main() -> None:
             )
         else:
             reranker = Qwen3Reranker(config.models.reranker, unload_after_score=args.low_vram)
-        predictions["adaptive_rrf+reranker"] = {}
-        latency["adaptive_rrf+reranker"] = []
+        predictions["cascade+reranker"] = {}
+        latency["cascade+reranker"] = []
         first_question = questions[0]
         first_candidate = segment_by_id[all_candidates[first_question["question_id"]][0]]
         reranker.score("视频内容", [first_candidate])
@@ -244,11 +304,11 @@ def main() -> None:
                 key=lambda item: item[2],
                 reverse=True,
             )
-            predictions["adaptive_rrf+reranker"][question_id] = [
+            predictions["cascade+reranker"][question_id] = [
                 segment.segment_id for segment, _, _ in reranked
             ]
-            latency["adaptive_rrf+reranker"].append(
-                latency["adaptive_rrf"][len(latency["adaptive_rrf+reranker"])]
+            latency["cascade+reranker"].append(
+                latency["cascade"][len(latency["cascade+reranker"])]
                 + (perf_counter() - started) * 1000
             )
 

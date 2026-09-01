@@ -1,3 +1,4 @@
+from .cascade import ordered_candidate_union, requires_fallback
 from .faiss_dense import ClipVisionRetriever, QwenTextRetriever
 from .frame_faiss import FrameClipVisionRetriever
 from .fusion import reciprocal_rank_fusion
@@ -15,5 +16,7 @@ __all__ = [
     "Qwen3VLEmbeddingRetriever",
     "QwenTextRetriever",
     "RoutingDecision",
+    "ordered_candidate_union",
     "reciprocal_rank_fusion",
+    "requires_fallback",
 ]

@@ -25,6 +25,10 @@ DEFAULT_TEMPORAL_PATTERNS = (
     r"随后|之后|之前|接下来|最初|最后",
     r"先.*再|顺序|过程|前后|发生了什么变化",
 )
+DEFAULT_SEMANTIC_PATTERNS = (
+    r"概括|总结|摘要|大意|主旨|核心观点|主要内容",
+    r"(?:这段|视频|讲话|演讲|报道).*(?:讲了什么|讨论什么|主要讲)",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +36,9 @@ class RoutingDecision:
     labels: tuple[str, ...]
     source_weights: dict[str, float]
     confidence: float
+    primary_sources: tuple[str, ...] = ()
+    fallback_sources: tuple[str, ...] = ()
+    candidate_mode: str = "cascade"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +56,7 @@ class AdaptiveFusionPolicy:
     visual_sparse_weight: float = 1.00
     visual_text_weight: float = 0.00
     visual_vision_weight: float = 2.00
-    visual_ocr_weight: float = 0.25
+    visual_ocr_weight: float = 0.0
     ocr_query_sparse_weight: float = 0.50
     ocr_query_text_weight: float = 0.00
     ocr_query_vision_weight: float = 0.50
@@ -59,6 +66,7 @@ class AdaptiveFusionPolicy:
     ocr_patterns: tuple[str, ...] = field(default=DEFAULT_OCR_PATTERNS)
     multimodal_patterns: tuple[str, ...] = field(default=DEFAULT_MULTIMODAL_PATTERNS)
     temporal_patterns: tuple[str, ...] = field(default=DEFAULT_TEMPORAL_PATTERNS)
+    semantic_patterns: tuple[str, ...] = field(default=DEFAULT_SEMANTIC_PATTERNS)
 
     def __post_init__(self) -> None:
         weights = (
@@ -96,13 +104,22 @@ class AdaptiveFusionPolicy:
             labels.append("multimodal")
         if self._matches(query, self.temporal_patterns):
             labels.append("temporal")
+        if self._matches(query, self.semantic_patterns):
+            labels.append("semantic")
         if not labels:
             labels.append("text")
         return tuple(labels)
 
     def intent(self, query: str) -> str:
         labels = self.intents(query)
-        for preferred in ("multimodal", "ocr", "visual", "temporal", "text"):
+        for preferred in (
+            "multimodal",
+            "ocr",
+            "visual",
+            "semantic",
+            "temporal",
+            "text",
+        ):
             if preferred in labels:
                 return preferred
         return "text"
@@ -128,7 +145,9 @@ class AdaptiveFusionPolicy:
             self.ocr_query_ocr_weight,
         )
         if "multimodal" in labels:
-            routes = [text_route, visual_route, ocr_route]
+            routes = [text_route, visual_route]
+            if "ocr" in labels:
+                routes.append(ocr_route)
         else:
             routes = []
             if "visual" in labels:
@@ -145,7 +164,33 @@ class AdaptiveFusionPolicy:
             if source is not None
         }
         confidence = 0.95 if "multimodal" in labels else 0.90 if labels != ("text",) else 0.75
-        return RoutingDecision(labels, weights, confidence)
+        primary_sources, fallback_sources, candidate_mode = self._cascade_plan(labels)
+        return RoutingDecision(
+            labels,
+            weights,
+            confidence,
+            primary_sources,
+            fallback_sources,
+            candidate_mode,
+        )
+
+    def _cascade_plan(
+        self, labels: tuple[str, ...]
+    ) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+        if "multimodal" in labels:
+            primary = [self.sparse_source, self.text_source, self.vision_source]
+            if "ocr" in labels and self.ocr_source is not None:
+                primary.append(self.ocr_source)
+            return tuple(dict.fromkeys(primary)), (), "union"
+        if "ocr" in labels and self.ocr_source is not None:
+            # The vision retriever locates likely screen/text frames; Qwen-VL reads
+            # the image later. CLIP itself is not treated as an OCR engine.
+            return (self.ocr_source,), (self.vision_source,), "cascade"
+        if "visual" in labels:
+            return (self.vision_source,), (self.text_source,), "cascade"
+        if "semantic" in labels:
+            return (self.text_source,), (self.sparse_source,), "cascade"
+        return (self.sparse_source,), (self.text_source,), "cascade"
 
     def source_weights(self, query: str) -> dict[str, float]:
         return self.decision(query).source_weights

@@ -1,6 +1,6 @@
 # VideoRAG：片段级中文多模态视频问答
 
-一个可复现的片段级 VideoRAG 系统：将视频转成带时间戳的 ASR、OCR、关键帧和视觉描述，通过多标签查询路由选择独立的语音文本、OCR、文本向量和图文向量召回，经加权 RRF、重叠证据去重和上下文扩展后，由 Qwen-VL 基于可验证引用生成答案。API 同时返回证据片段、时间范围、路由标签、置信度和阶段延迟。
+一个可复现的片段级 VideoRAG 系统：将视频转成带时间戳的 ASR、OCR、关键帧和视觉描述，通过多标签查询路由选择主检索器，仅在低置信度时级联回退；多模态问题对相关通道候选取并集并统一精排。候选经过重叠去重和上下文扩展后，由 Qwen-VL 基于可验证引用生成答案。API 同时返回证据片段、时间范围、路由标签、置信度和阶段延迟。
 
 > 当前状态：核心流水线、索引校验、帧级检索实验、评测工具和人工复核系统均已实现；仓库中的问题集仍是自动生成候选集，尚不能把诊断指标当作正式人工测试集结果。
 
@@ -22,7 +22,7 @@
        Okapi BM25      独立 OCR BM25       Qwen3-Embedding / Qwen3-VL
              └───────────────────┴───────────────────┬───────────────────┘
                                                      ▼
-                              查询自适应加权 RRF + 重叠证据去重
+                        主检索优先 / 低置信度回退 / 多模态候选并集
                                                      ▼
                            可选多模态精排 + 时序邻居上下文扩展
                                                      ▼
@@ -41,7 +41,8 @@
 - Qwen2.5-VL 生成客观关键帧描述，并基于最终证据完成一次性多模态生成。
 - 可配置 Okapi BM25、OCR BM25、Qwen3-Embedding、Chinese-CLIP/Qwen3-VL 四路召回；默认 `b=0`，避免片段文本长度差异造成不稳定惩罚。
 - 四路召回分别使用独立 Top-K，便于调参与消融。
-- 多标签路由同时识别 text、visual、ocr、multimodal 和 temporal；只启动需要的检索路径。
+- 多标签路由识别 text、semantic、visual、ocr、multimodal 和 temporal；事实题默认 BM25、概括题默认文本向量、视觉题默认视觉向量、文字读取题默认 OCR。
+- 单模态主检索未达到来源独立阈值时才执行回退；多模态问题轮询合并相关通道候选，避免弱检索器通过固定 RRF 稀释强结果。
 - 重叠候选按时间交并去重；普通问题扩展相邻片段，时序问题使用更宽的前后上下文。
 - 生成端严格返回 `answerable/answer/confidence/citations`；未知引用、无引用、低置信度或证据不足都会触发拒答。
 - 实测文本 Qwen3-Reranker 在当前诊断集产生负收益，因此默认保留融合排序；Qwen3-VL 多模态精排作为可选升级。
@@ -67,7 +68,7 @@
 
 仓库提供两套可切换配置：
 
-- `config.toml`：稳定模式，采用多标签路由 + BM25/OCR/Chinese-CLIP + 加权 RRF + Qwen2.5-VL。
+- `config.toml`：稳定模式，采用查询路由级联 + BM25/OCR/文本向量/Chinese-CLIP + Qwen2.5-VL；RRF 仅作为可切换消融基线。
 - `config.qwen3-vl.toml`：升级模式，事实题保留低延迟 BM25 路径，OCR题启用独立OCR召回，视觉题才用片段文本与有序关键帧进行 Qwen3-VL 召回和精排。
 
 四项升级的字段、路由和拒答规则见 [`docs/GROUNDED_MULTIMODAL_PIPELINE_ZH.md`](docs/GROUNDED_MULTIMODAL_PIPELINE_ZH.md)。
@@ -80,8 +81,8 @@ src/video_rag/
   api/            # Flask API 与视频证据页面
   evaluation/     # 检索、答案、数据集和复核事件校验
   ingestion/      # 视频探测、Whisper ASR、关键帧和片段化
-  retrieval/      # 稀疏、FAISS、物理帧检索与 RRF
-  pipeline.py     # Recall -> Fusion -> Rerank -> Generate 编排
+  retrieval/      # 稀疏、FAISS、物理帧、级联选择与 RRF 基线
+  pipeline.py     # Route -> Cascade/Union -> Rerank -> Generate 编排
 scripts/          # 数据下载、预处理、建库、评测和人工标注工具
 tests/            # 不加载大模型的单元与工作流测试
 data/evaluation/  # 候选问题、复核队列和数据说明
@@ -279,7 +280,7 @@ python scripts/evaluate_retrieval.py \
   --with-reranker
 ```
 
-脚本输出单路、双路、三路 RRF 和可选 Reranker 的 Recall@1/5/10、MRR、nDCG 及延迟。
+脚本输出单路、路由级联、双路/三路 RRF 和可选 Reranker 的 Recall@1/5/10、MRR、nDCG 及延迟。
 
 **评测边界：** 仓库中的 seed、candidate 和 review queue 都是自动生成候选数据，不是人工金标准。它们可用于流程验证和诊断实验，但不能用于对外宣称正式准确率。详细字段和限制见 [`data/evaluation/README.md`](data/evaluation/README.md)。
 
@@ -310,4 +311,4 @@ python -m pytest -q
 python -m ruff check src scripts tests
 ```
 
-测试不会下载或加载大模型，覆盖片段化、RRF、Pipeline、FAISS 数值规范、帧级聚合、索引 manifest、API、数据集验证、split 防泄漏和复核事件生命周期。真实 GPU 验收仍需单独执行完整预处理、建库和问答流程。
+测试不会下载或加载大模型，覆盖片段化、查询路由、级联回退、候选并集、RRF 基线、Pipeline、FAISS 数值规范、帧级聚合、索引 manifest、API、数据集验证、split 防泄漏和复核事件生命周期。真实 GPU 验收仍需单独执行完整预处理、建库和问答流程。
