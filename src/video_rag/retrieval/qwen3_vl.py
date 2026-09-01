@@ -61,7 +61,7 @@ class Qwen3VLEmbeddingRetriever(FaissDenseRetriever):
             item: dict[str, Any] = {
                 "text": (
                     f"Time {segment.start_time:.3f}-{segment.end_time:.3f} seconds\n"
-                    f"{segment.searchable_text}"
+                    f"{segment.evidence_text}"
                 )
             }
             images = _existing_images(segment, limit=self.max_frames)

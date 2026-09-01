@@ -1,6 +1,15 @@
 [segmentation]
+strategy = "semantic"
 duration_seconds = 20.0
 overlap_seconds = 5.0
+minimum_seconds = 8.0
+maximum_seconds = 30.0
+
+[ocr]
+enabled = true
+backend = "paddleocr"
+language = "ch"
+minimum_confidence = 0.55
 
 [retrieval]
 sparse_backend = "bm25"
@@ -12,17 +21,28 @@ adaptive_fusion = true
 sparse_weight = 1.00
 text_weight = 0.00
 vision_weight = 0.00
+ocr_weight = 0.00
 visual_sparse_weight = 1.00
 visual_text_weight = 0.00
 visual_vision_weight = 2.00
+visual_ocr_weight = 0.25
+ocr_query_sparse_weight = 0.50
+ocr_query_text_weight = 0.00
+ocr_query_vision_weight = 0.50
+ocr_query_ocr_weight = 2.00
 agreement_bonus = 0.05
 reranker_weight = 0.00
 sparse_top_k = 20
 text_top_k = 20
 vision_top_k = 20
+ocr_top_k = 20
 fusion_top_k = 20
 rerank_top_k = 3
 rrf_k = 60
+neighbor_hops = 1
+temporal_neighbor_hops = 2
+dedupe_overlap_ratio = 0.20
+max_generation_segments = 8
 
 [generation]
 backend = "qwen2_5_vl"
@@ -31,7 +51,9 @@ max_images = 6
 max_frames = 16
 video_fps = 1.0
 minimum_rerank_score = 0.20
+minimum_generator_confidence = 0.20
 allow_abstention = true
+require_citations = true
 
 [models]
 text_embedding = "Qwen/Qwen3-Embedding-0.6B"

@@ -20,6 +20,7 @@ from video_rag.retrieval import (
     BM25Retriever,
     ClipVisionRetriever,
     InMemoryLexicalRetriever,
+    OCRBM25Retriever,
     Qwen3VLEmbeddingRetriever,
     QwenTextRetriever,
 )
@@ -101,16 +102,22 @@ def build_real_pipeline(
         if config.generation.backend == "qwen3_vl"
         else QwenVLService(config.models.vision_language)
     )
+    text_retriever = QwenTextRetriever(
+        config.models.text_embedding,
+        device=device,
+        index_dir=index_dir,
+    )
+    ocr_retriever = (
+        OCRBM25Retriever(k1=config.retrieval.bm25_k1, b=config.retrieval.bm25_b)
+        if config.ocr.enabled
+        else None
+    )
+    retrievers = [sparse_retriever, text_retriever, vision_retriever]
+    if ocr_retriever is not None:
+        retrievers.append(ocr_retriever)
+
     pipeline = VideoRAGPipeline(
-        retrievers=[
-            sparse_retriever,
-            QwenTextRetriever(
-                config.models.text_embedding,
-                device=device,
-                index_dir=index_dir,
-            ),
-            vision_retriever,
-        ],
+        retrievers=retrievers,
         reranker=reranker,
         generator=QwenVLEvidenceGenerator(
             service,
@@ -124,29 +131,47 @@ def build_real_pipeline(
             sparse_retriever.name: config.retrieval.sparse_top_k,
             "text_dense": config.retrieval.text_top_k,
             vision_retriever.name: config.retrieval.vision_top_k,
+            **(
+                {ocr_retriever.name: config.retrieval.ocr_top_k}
+                if ocr_retriever is not None
+                else {}
+            ),
         },
         fusion_top_k=config.retrieval.fusion_top_k,
         rerank_top_k=config.retrieval.rerank_top_k,
         rrf_k=config.retrieval.rrf_k,
         minimum_rerank_score=config.generation.minimum_rerank_score,
+        minimum_generator_confidence=config.generation.minimum_generator_confidence,
         allow_abstention=config.generation.allow_abstention,
+        require_citations=config.generation.require_citations,
         fusion_policy=(
             AdaptiveFusionPolicy(
                 sparse_source=sparse_retriever.name,
                 text_source="text_dense",
                 vision_source=vision_retriever.name,
+                ocr_source=ocr_retriever.name if ocr_retriever is not None else None,
                 sparse_weight=config.retrieval.sparse_weight,
                 text_weight=config.retrieval.text_weight,
                 vision_weight=config.retrieval.vision_weight,
+                ocr_weight=config.retrieval.ocr_weight,
                 visual_sparse_weight=config.retrieval.visual_sparse_weight,
                 visual_text_weight=config.retrieval.visual_text_weight,
                 visual_vision_weight=config.retrieval.visual_vision_weight,
+                visual_ocr_weight=config.retrieval.visual_ocr_weight,
+                ocr_query_sparse_weight=config.retrieval.ocr_query_sparse_weight,
+                ocr_query_text_weight=config.retrieval.ocr_query_text_weight,
+                ocr_query_vision_weight=config.retrieval.ocr_query_vision_weight,
+                ocr_query_ocr_weight=config.retrieval.ocr_query_ocr_weight,
                 agreement_bonus=config.retrieval.agreement_bonus,
             )
             if config.retrieval.adaptive_fusion
             else None
         ),
         reranker_weight=config.retrieval.reranker_weight,
+        neighbor_hops=config.retrieval.neighbor_hops,
+        temporal_neighbor_hops=config.retrieval.temporal_neighbor_hops,
+        dedupe_overlap_ratio=config.retrieval.dedupe_overlap_ratio,
+        max_generation_segments=config.retrieval.max_generation_segments,
     )
     pipeline.build(load_segments(segments_path))
     return pipeline

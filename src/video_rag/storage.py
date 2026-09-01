@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from video_rag.schemas import Keyframe, VideoSegment
+from video_rag.schemas import Keyframe, OCRText, VideoSegment
 
 
 def save_segments(path: str | Path, segments: list[VideoSegment]) -> None:
@@ -23,8 +23,16 @@ def load_segments(path: str | Path) -> list[VideoSegment]:
             try:
                 data = json.loads(line)
                 data["keyframes"] = tuple(Keyframe(**item) for item in data.get("keyframes", ()))
+                data["ocr_items"] = tuple(
+                    OCRText(
+                        **{
+                            **item,
+                            "bbox": tuple(tuple(point) for point in item.get("bbox", ())),
+                        }
+                    )
+                    for item in data.get("ocr_items", ())
+                )
                 segments.append(VideoSegment(**data))
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise ValueError(f"Invalid segment on line {line_number}: {exc}") from exc
     return segments
-

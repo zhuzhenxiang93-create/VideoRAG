@@ -85,7 +85,7 @@ def test_frame_sequence_generation_preserves_ordered_frames(tmp_path):
         max_frames=8,
     )
 
-    assert generator.generate("发生了什么", [make_segment(frame)]) == "answer"
+    assert generator.generate("发生了什么", [make_segment(frame)]).answer == "answer"
     video_items = [item for item in service.content if item["type"] == "video"]
     assert video_items == [
         {"type": "video", "video": [str(frame)], "sample_fps": 1.0}

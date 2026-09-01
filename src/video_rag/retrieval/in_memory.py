@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
+from collections.abc import Callable
 
 from video_rag.schemas import SearchHit, VideoSegment
 
@@ -71,13 +72,20 @@ class BM25Retriever:
 
     name = "bm25"
 
-    def __init__(self, *, k1: float = 1.2, b: float = 0.75) -> None:
+    def __init__(
+        self,
+        *,
+        k1: float = 1.2,
+        b: float = 0.75,
+        document_text: Callable[[VideoSegment], str] | None = None,
+    ) -> None:
         if k1 <= 0:
             raise ValueError("k1 must be positive")
         if not 0 <= b <= 1:
             raise ValueError("b must be between 0 and 1")
         self.k1 = k1
         self.b = b
+        self._document_text = document_text or (lambda segment: segment.searchable_text)
         self._segments: list[VideoSegment] = []
         self._documents: list[Counter[str]] = []
         self._document_lengths: list[int] = []
@@ -86,7 +94,7 @@ class BM25Retriever:
 
     def build(self, segments: list[VideoSegment]) -> None:
         self._segments = list(segments)
-        self._documents = [Counter(tokenize(item.searchable_text)) for item in segments]
+        self._documents = [Counter(tokenize(self._document_text(item))) for item in segments]
         self._document_lengths = [sum(document.values()) for document in self._documents]
         self._average_document_length = (
             sum(self._document_lengths) / len(self._document_lengths)
@@ -135,3 +143,12 @@ class BM25Retriever:
             SearchHit(segment_id, score, self.name, rank)
             for rank, (segment_id, score) in enumerate(scored[:top_k], start=1)
         ]
+
+
+class OCRBM25Retriever(BM25Retriever):
+    """Independent sparse retrieval over timestamped on-screen text only."""
+
+    name = "ocr_bm25"
+
+    def __init__(self, *, k1: float = 1.2, b: float = 0.0) -> None:
+        super().__init__(k1=k1, b=b, document_text=lambda segment: segment.ocr_text)

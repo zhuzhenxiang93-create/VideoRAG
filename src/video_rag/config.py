@@ -7,8 +7,19 @@ from pathlib import Path
 
 @dataclass(frozen=True, slots=True)
 class SegmentationConfig:
+    strategy: str = "semantic"
     duration_seconds: float = 20.0
     overlap_seconds: float = 5.0
+    minimum_seconds: float = 8.0
+    maximum_seconds: float = 30.0
+
+
+@dataclass(frozen=True, slots=True)
+class OCRConfig:
+    enabled: bool = True
+    backend: str = "paddleocr"
+    language: str = "ch"
+    minimum_confidence: float = 0.55
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,17 +33,28 @@ class RetrievalConfig:
     sparse_weight: float = 1.00
     text_weight: float = 0.00
     vision_weight: float = 0.00
+    ocr_weight: float = 0.00
     visual_sparse_weight: float = 1.00
     visual_text_weight: float = 0.00
     visual_vision_weight: float = 2.00
+    visual_ocr_weight: float = 0.25
+    ocr_query_sparse_weight: float = 0.50
+    ocr_query_text_weight: float = 0.00
+    ocr_query_vision_weight: float = 0.50
+    ocr_query_ocr_weight: float = 2.00
     agreement_bonus: float = 0.05
     reranker_weight: float = 0.00
     sparse_top_k: int = 20
     text_top_k: int = 20
     vision_top_k: int = 20
+    ocr_top_k: int = 20
     fusion_top_k: int = 20
     rerank_top_k: int = 3
     rrf_k: int = 60
+    neighbor_hops: int = 1
+    temporal_neighbor_hops: int = 2
+    dedupe_overlap_ratio: float = 0.20
+    max_generation_segments: int = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +65,9 @@ class GenerationConfig:
     max_frames: int = 16
     video_fps: float = 1.0
     minimum_rerank_score: float = 0.20
+    minimum_generator_confidence: float = 0.20
     allow_abstention: bool = True
+    require_citations: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +86,7 @@ class ModelConfig:
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     segmentation: SegmentationConfig
+    ocr: OCRConfig
     retrieval: RetrievalConfig
     generation: GenerationConfig
     models: ModelConfig
@@ -72,11 +97,17 @@ def load_config(path: str | Path) -> AppConfig:
         raw = tomllib.load(stream)
     config = AppConfig(
         segmentation=SegmentationConfig(**raw.get("segmentation", {})),
+        ocr=OCRConfig(**raw.get("ocr", {})),
         retrieval=RetrievalConfig(**raw.get("retrieval", {})),
         generation=GenerationConfig(**raw.get("generation", {})),
         models=ModelConfig(**raw["models"]),
     )
     allowed = {
+        "segmentation.strategy": (
+            config.segmentation.strategy,
+            {"fixed", "semantic"},
+        ),
+        "ocr.backend": (config.ocr.backend, {"paddleocr"}),
         "retrieval.sparse_backend": (
             config.retrieval.sparse_backend,
             {"bm25", "bm25_like"},
@@ -101,4 +132,15 @@ def load_config(path: str | Path) -> AppConfig:
     for field, (value, choices) in allowed.items():
         if value not in choices:
             raise ValueError(f"{field} must be one of {sorted(choices)}, got {value!r}")
+    if not 0 <= config.ocr.minimum_confidence <= 1:
+        raise ValueError("ocr.minimum_confidence must be between 0 and 1")
+    if config.segmentation.maximum_seconds < config.segmentation.duration_seconds:
+        raise ValueError("segmentation.maximum_seconds must be >= duration_seconds")
+    if not 0 <= config.retrieval.dedupe_overlap_ratio <= 1:
+        raise ValueError("retrieval.dedupe_overlap_ratio must be between 0 and 1")
+    if min(
+        config.retrieval.neighbor_hops,
+        config.retrieval.temporal_neighbor_hops,
+    ) < 0:
+        raise ValueError("retrieval neighbor hops must be non-negative")
     return config

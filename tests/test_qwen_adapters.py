@@ -1,6 +1,6 @@
 import unittest
 
-from video_rag.adapters.qwen import QwenVLEvidenceGenerator
+from video_rag.adapters.qwen import QwenVLEvidenceGenerator, parse_generated_answer
 from video_rag.schemas import VideoSegment
 
 
@@ -29,5 +29,17 @@ class QwenAdapterTests(unittest.TestCase):
             end_time=10,
             transcript="evidence",
         )
-        self.assertEqual(generator.generate("question", [segment]), "generated")
+        result = generator.generate("question", [segment])
+        self.assertEqual(result.answer, "generated")
         self.assertTrue(service.unloaded)
+
+    def test_structured_generation_parser_preserves_citations(self):
+        result = parse_generated_answer(
+            '{"answerable":true,"answer":"机场","confidence":0.8,'
+            '"citations":["s1"]}',
+            {"s1"},
+        )
+
+        self.assertTrue(result.answerable)
+        self.assertEqual(result.citations, ("s1",))
+        self.assertEqual(result.confidence, 0.8)

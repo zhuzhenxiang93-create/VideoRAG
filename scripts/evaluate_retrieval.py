@@ -14,6 +14,7 @@ from video_rag.retrieval import (
     AdaptiveFusionPolicy,
     BM25Retriever,
     ClipVisionRetriever,
+    OCRBM25Retriever,
     Qwen3VLEmbeddingRetriever,
     QwenTextRetriever,
     reciprocal_rank_fusion,
@@ -31,11 +32,14 @@ ROUTES = {
     "bm25": ("bm25",),
     "embedding": ("embedding",),
     "clip": ("clip",),
+    "ocr": ("ocr",),
     "bm25+embedding": ("bm25", "embedding"),
     "bm25+clip": ("bm25", "clip"),
+    "bm25+ocr": ("bm25", "ocr"),
     "embedding+clip": ("embedding", "clip"),
     "all_rrf": ("bm25", "embedding", "clip"),
-    "adaptive_rrf": ("bm25", "embedding", "clip"),
+    "all_multimodal_rrf": ("bm25", "embedding", "clip", "ocr"),
+    "adaptive_rrf": ("bm25", "embedding", "clip", "ocr"),
 }
 
 
@@ -133,6 +137,10 @@ def main() -> None:
             config.models.text_embedding, device=args.device, index_dir=args.index_dir
         ),
         "clip": vision_retriever,
+        "ocr": OCRBM25Retriever(
+            k1=config.retrieval.bm25_k1,
+            b=config.retrieval.bm25_b,
+        ),
     }
     for retriever in retrievers.values():
         retriever.build(segments)
@@ -141,12 +149,19 @@ def main() -> None:
         sparse_source=retrievers["bm25"].name,
         text_source=retrievers["embedding"].name,
         vision_source=retrievers["clip"].name,
+        ocr_source=retrievers["ocr"].name,
         sparse_weight=config.retrieval.sparse_weight,
         text_weight=config.retrieval.text_weight,
         vision_weight=config.retrieval.vision_weight,
+        ocr_weight=config.retrieval.ocr_weight,
         visual_sparse_weight=config.retrieval.visual_sparse_weight,
         visual_text_weight=config.retrieval.visual_text_weight,
         visual_vision_weight=config.retrieval.visual_vision_weight,
+        visual_ocr_weight=config.retrieval.visual_ocr_weight,
+        ocr_query_sparse_weight=config.retrieval.ocr_query_sparse_weight,
+        ocr_query_text_weight=config.retrieval.ocr_query_text_weight,
+        ocr_query_vision_weight=config.retrieval.ocr_query_vision_weight,
+        ocr_query_ocr_weight=config.retrieval.ocr_query_ocr_weight,
         agreement_bonus=config.retrieval.agreement_bonus,
     )
 

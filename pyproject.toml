@@ -32,6 +32,10 @@ qwen3 = [
 video = [
   "opencv-python-headless>=4.10",
 ]
+ocr = [
+  "paddleocr>=3.0,<4",
+  "paddlepaddle>=3.0,<4",
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.6",

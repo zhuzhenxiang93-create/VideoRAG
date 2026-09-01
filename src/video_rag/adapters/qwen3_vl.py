@@ -80,7 +80,7 @@ class Qwen3VLReranker:
             document: dict[str, Any] = {
                 "text": (
                     f"Segment {segment.segment_id}, {segment.start_time:.3f}-"
-                    f"{segment.end_time:.3f} seconds\n{segment.searchable_text}"
+                    f"{segment.end_time:.3f} seconds\n{segment.evidence_text}"
                 )
             }
             images = _existing_images(segment, limit=self.max_frames)
@@ -113,3 +113,4 @@ class Qwen3VLReranker:
                 torch.cuda.empty_cache()
         except ImportError:
             pass
+    supports_confidence = True

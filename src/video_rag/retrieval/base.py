@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from video_rag.schemas import SearchHit, VideoSegment
+from video_rag.schemas import GeneratedAnswer, SearchHit, VideoSegment
 
 
 class Retriever(Protocol):
@@ -18,5 +18,6 @@ class Reranker(Protocol):
 
 
 class Generator(Protocol):
-    def generate(self, query: str, segments: list[VideoSegment]) -> str: ...
-
+    def generate(
+        self, query: str, segments: list[VideoSegment]
+    ) -> GeneratedAnswer | str: ...

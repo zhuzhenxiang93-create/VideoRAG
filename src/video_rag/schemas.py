@@ -26,6 +26,22 @@ class Keyframe:
 
 
 @dataclass(frozen=True, slots=True)
+class OCRText:
+    timestamp: float
+    text: str
+    confidence: float
+    bbox: tuple[tuple[float, float], ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if self.timestamp < 0:
+            raise ValueError("OCRText timestamp must be non-negative")
+        if not self.text.strip():
+            raise ValueError("OCRText text must not be empty")
+        if not 0 <= self.confidence <= 1:
+            raise ValueError("OCRText confidence must be between 0 and 1")
+
+
+@dataclass(frozen=True, slots=True)
 class VideoSegment:
     segment_id: str
     video_id: str
@@ -34,7 +50,9 @@ class VideoSegment:
     end_time: float
     transcript: str = ""
     visual_caption: str = ""
+    ocr_text: str = ""
     keyframes: tuple[Keyframe, ...] = field(default_factory=tuple)
+    ocr_items: tuple[OCRText, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         if not self.segment_id or not self.video_id:
@@ -49,6 +67,17 @@ class VideoSegment:
             for value in (
                 f"[ASR] {self.transcript.strip()}" if self.transcript.strip() else "",
                 f"[视觉] {self.visual_caption.strip()}" if self.visual_caption.strip() else "",
+            )
+            if value
+        )
+
+    @property
+    def evidence_text(self) -> str:
+        return "\n".join(
+            value
+            for value in (
+                self.searchable_text,
+                f"[OCR] {self.ocr_text.strip()}" if self.ocr_text.strip() else "",
             )
             if value
         )
@@ -84,16 +113,34 @@ class Evidence:
 
 
 @dataclass(frozen=True, slots=True)
+class GeneratedAnswer:
+    answer: str
+    answerable: bool
+    citations: tuple[str, ...] = field(default_factory=tuple)
+    confidence: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.confidence is not None and not 0 <= self.confidence <= 1:
+            raise ValueError("GeneratedAnswer confidence must be between 0 and 1")
+
+
+@dataclass(frozen=True, slots=True)
 class Answer:
     answer: str
     evidence: tuple[Evidence, ...]
     abstained: bool = False
+    citations: tuple[str, ...] = field(default_factory=tuple)
+    confidence: float | None = None
+    route_labels: tuple[str, ...] = field(default_factory=tuple)
     latency_ms: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "answer": self.answer,
             "abstained": self.abstained,
+            "citations": list(self.citations),
+            "confidence": self.confidence,
+            "route_labels": list(self.route_labels),
             "evidence": [item.to_dict() for item in self.evidence],
             "latency_ms": self.latency_ms,
         }

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import re
 from typing import Any
 
-from video_rag.schemas import Keyframe, VideoSegment
+from video_rag.schemas import GeneratedAnswer, Keyframe, VideoSegment
 
 
 class Qwen3Reranker:
     """Qwen3-Reranker adapter that scores query against multimodal segment evidence."""
+
+    supports_confidence = True
 
     def __init__(
         self,
@@ -295,6 +299,46 @@ class QwenVLCaptioner:
         )
 
 
+def parse_generated_answer(raw: str, allowed_segment_ids: set[str]) -> GeneratedAnswer:
+    """Parse strict JSON when available and preserve invalid citations for pipeline validation."""
+    cleaned = raw.strip()
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, flags=re.DOTALL)
+    candidate = fenced.group(1) if fenced else cleaned
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        citations = tuple(
+            segment_id for segment_id in allowed_segment_ids if segment_id in cleaned
+        )
+        insufficient = (
+            "无法确定" in cleaned
+            or "证据不足" in cleaned
+            or "insufficient" in cleaned.casefold()
+        )
+        return GeneratedAnswer(cleaned, not insufficient, citations=citations)
+    if not isinstance(payload, dict):
+        return GeneratedAnswer(cleaned, False)
+    citations_value = payload.get("citations", ())
+    citations = (
+        tuple(str(value) for value in citations_value)
+        if isinstance(citations_value, list)
+        else ()
+    )
+    confidence_value = payload.get("confidence")
+    try:
+        confidence = float(confidence_value) if confidence_value is not None else None
+    except (TypeError, ValueError):
+        confidence = None
+    if confidence is not None:
+        confidence = min(1.0, max(0.0, confidence))
+    return GeneratedAnswer(
+        answer=str(payload.get("answer", "")).strip(),
+        answerable=payload.get("answerable") is True,
+        citations=citations,
+        confidence=confidence,
+    )
+
+
 class QwenVLEvidenceGenerator:
     def __init__(
         self,
@@ -315,7 +359,7 @@ class QwenVLEvidenceGenerator:
         self.video_fps = video_fps
         self.unload_after_generate = unload_after_generate
 
-    def generate(self, query: str, segments: list[VideoSegment]) -> str:
+    def generate(self, query: str, segments: list[VideoSegment]) -> GeneratedAnswer:
         content: list[dict[str, Any]] = []
         evidence_text: list[str] = []
         image_count = 0
@@ -323,7 +367,7 @@ class QwenVLEvidenceGenerator:
         for segment in segments:
             evidence_text.append(
                 f"[{segment.segment_id}] Time {segment.start_time:.1f}-{segment.end_time:.1f} seconds\n"
-                f"{segment.searchable_text}"
+                f"{segment.evidence_text}"
             )
             for frame in segment.keyframes:
                 if not Path(frame.path).exists():
@@ -351,15 +395,16 @@ class QwenVLEvidenceGenerator:
                 }
             )
         instruction = (
-            "Answer the question using only the candidate video evidence below. "
-            "Do not introduce external facts. If the evidence is insufficient, answer exactly: "
-            "The current video evidence is insufficient to determine the answer. "
-            "Give a concise answer and cite the supporting segment_id.\n\n"
-            f"Question: {query}\n\nCandidate evidence:\n" + "\n\n".join(evidence_text)
+            "仅根据下面候选视频证据回答问题，不得引入外部事实。严格输出一个JSON对象，不要输出Markdown。"
+            "字段必须是 answerable(boolean)、answer(string)、confidence(0到1)、citations(string数组)。"
+            "citations只能填写确实支持答案的候选segment_id；证据不足时answerable=false、answer填写"
+            "“根据当前视频内容无法确定。”、citations为空数组。\n\n"
+            f"问题：{query}\n\n候选证据：\n" + "\n\n".join(evidence_text)
         )
         content.append({"type": "text", "text": instruction})
         try:
-            return self.service.infer(content)
+            raw = self.service.infer(content)
+            return parse_generated_answer(raw, {segment.segment_id for segment in segments})
         finally:
             if self.unload_after_generate:
                 self.service.unload()
