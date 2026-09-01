@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 from video_rag.adapters import QwenVLCaptioner, QwenVLService
 from video_rag.config import load_config
 from video_rag.ingestion import (
-    SceneKeyframeExtractor,
     PaddleOCRExtractor,
+    SceneKeyframeExtractor,
     WhisperTranscriber,
     materialize_segments,
     probe_video,

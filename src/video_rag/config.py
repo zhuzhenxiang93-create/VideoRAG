@@ -134,8 +134,15 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError(f"{field} must be one of {sorted(choices)}, got {value!r}")
     if not 0 <= config.ocr.minimum_confidence <= 1:
         raise ValueError("ocr.minimum_confidence must be between 0 and 1")
-    if config.segmentation.maximum_seconds < config.segmentation.duration_seconds:
-        raise ValueError("segmentation.maximum_seconds must be >= duration_seconds")
+    if not (
+        0
+        < config.segmentation.minimum_seconds
+        <= config.segmentation.duration_seconds
+        <= config.segmentation.maximum_seconds
+    ):
+        raise ValueError("segmentation requires 0 < minimum <= duration <= maximum")
+    if not 0 <= config.segmentation.overlap_seconds < config.segmentation.minimum_seconds:
+        raise ValueError("segmentation overlap must satisfy 0 <= overlap < minimum")
     if not 0 <= config.retrieval.dedupe_overlap_ratio <= 1:
         raise ValueError("retrieval.dedupe_overlap_ratio must be between 0 and 1")
     if min(

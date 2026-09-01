@@ -1,6 +1,6 @@
 # VideoRAG：片段级中文多模态视频问答
 
-一个可复现的片段级 VideoRAG 系统：将视频转成带时间戳的 ASR、关键帧和视觉描述，通过查询意图路由选择稀疏、文本向量和图文向量召回，经加权 RRF 后由 Qwen-VL 基于 Top-K 证据生成答案。API 同时返回证据片段、时间范围和阶段延迟，前端可以直接跳转到对应视频位置。
+一个可复现的片段级 VideoRAG 系统：将视频转成带时间戳的 ASR、OCR、关键帧和视觉描述，通过多标签查询路由选择独立的语音文本、OCR、文本向量和图文向量召回，经加权 RRF、重叠证据去重和上下文扩展后，由 Qwen-VL 基于可验证引用生成答案。API 同时返回证据片段、时间范围、路由标签、置信度和阶段延迟。
 
 > 当前状态：核心流水线、索引校验、帧级检索实验、评测工具和人工复核系统均已实现；仓库中的问题集仍是自动生成候选集，尚不能把诊断指标当作正式人工测试集结果。
 
@@ -9,37 +9,41 @@
 ```text
 视频
  ├─ Whisper 时间戳 ASR ─────────────────────────────┐
- └─ 场景变化/清晰度关键帧 ─ Qwen2.5-VL 视觉描述 ────┤
+ ├─ 关键帧 ─ PaddleOCR 时间戳文字 ──────────────────┤
+ └─ 场景变化/清晰度关键帧 ─ Qwen-VL 视觉描述 ───────┤
                                                      ▼
-                                  20 秒窗口、5 秒重叠的视频片段
+                              ASR/场景边界感知的语义视频片段
                                                      │
                                          查询意图路由
-                          ┌───────────────┴────────────────┐
-                       事实问题                          视觉问题
-                          │                                │
-             ┌────────────┴──────┬─────────────────────────┴─────────────┐
+                           语音/视觉/OCR/多模态/时序
+                                           │
+             ┌───────────────────┬─────────┴─────────┬───────────────────┐
              ▼                   ▼                                       ▼
-       Okapi BM25 稀疏召回  Qwen3-Embedding + FAISS        Chinese-CLIP + FAISS
+       Okapi BM25      独立 OCR BM25       Qwen3-Embedding / Qwen3-VL
              └───────────────────┴───────────────────┬───────────────────┘
                                                      ▼
-                                          查询自适应加权 RRF
+                              查询自适应加权 RRF + 重叠证据去重
                                                      ▼
-                                   可选 Qwen3-VL 多模态精排
+                           可选多模态精排 + 时序邻居上下文扩展
                                                      ▼
-                                      Qwen2.5-VL 证据约束生成
+                                  Qwen-VL 结构化证据约束生成
                                                      ▼
-                                  答案 + 证据 + 时间戳 + 阶段延迟
+                         答案 + 已验证引用 + 时间戳 + 置信度 + 延迟
 ```
 
 ## 核心能力
 
-- `VideoSegment` 统一保存视频 ID、源路径、起止时间、ASR、视觉描述和关键帧。
-- Whisper 保留 ASR 片段时间戳，并与 20 秒滑动窗口自动对齐。
+- `VideoSegment` 统一保存视频 ID、源路径、起止时间、ASR、OCR、视觉描述和关键帧。
+- Whisper 保留 ASR 片段时间戳，并与语义窗口自动对齐。
+- PaddleOCR 在关键帧上提取文字、置信度、坐标和时间戳，连续覆盖文字自动去重，并使用独立 `ocr_bm25` 召回。
+- 语义切片优先在 ASR 句末或场景边界结束，同时保留固定窗口兼容模式。
 - 每秒采样视频，结合场景变化、Laplacian 清晰度和时间去重选择关键帧。
 - Qwen2.5-VL 生成客观关键帧描述，并基于最终证据完成一次性多模态生成。
-- 可配置 Okapi BM25、Qwen3-Embedding、Chinese-CLIP 三路召回；针对固定时长重叠片段，默认 `b=0`，避免长 ASR 片段被过度惩罚。
-- 三路召回分别使用 `sparse_top_k`、`text_top_k` 和 `vision_top_k`，便于独立调参与消融。
-- 查询路由使事实题只运行稀疏检索，明确视觉问题才启动视觉分支；加权 RRF 支持跨模态一致性奖励。
+- 可配置 Okapi BM25、OCR BM25、Qwen3-Embedding、Chinese-CLIP/Qwen3-VL 四路召回；默认 `b=0`，避免片段文本长度差异造成不稳定惩罚。
+- 四路召回分别使用独立 Top-K，便于调参与消融。
+- 多标签路由同时识别 text、visual、ocr、multimodal 和 temporal；只启动需要的检索路径。
+- 重叠候选按时间交并去重；普通问题扩展相邻片段，时序问题使用更宽的前后上下文。
+- 生成端严格返回 `answerable/answer/confidence/citations`；未知引用、无引用、低置信度或证据不足都会触发拒答。
 - 实测文本 Qwen3-Reranker 在当前诊断集产生负收益，因此默认保留融合排序；Qwen3-VL 多模态精排作为可选升级。
 - 可选 Qwen3-VL-Embedding、Qwen3-VL-Reranker 和 Qwen3-VL 生成端到端升级路径；旧模型配置仍可直接运行。
 - 所有向量转为 L2 归一化 `float32`，使用 FAISS `IndexFlatIP` 实现余弦相似度精确检索。
@@ -53,6 +57,7 @@
 | 阶段 | 模型 |
 |---|---|
 | ASR | `openai/whisper-small` |
+| OCR | PaddleOCR（中文） |
 | 文本向量 | `Qwen/Qwen3-Embedding-0.6B` |
 | 中文图文向量 | `OFA-Sys/chinese-clip-vit-base-patch16` |
 | 候选精排 | 默认保持融合排序；可选 `Qwen/Qwen3-Reranker-0.6B` |
@@ -62,8 +67,10 @@
 
 仓库提供两套可切换配置：
 
-- `config.toml`：实测稳定模式，采用查询路由 + BM25/Chinese-CLIP + 加权 RRF + Qwen2.5-VL。
-- `config.qwen3-vl.toml`：升级模式，事实题保留低延迟 BM25 路径，视觉题才用片段文本与有序关键帧进行 Qwen3-VL 召回和精排，并由 Qwen3-VL 对关键帧序列生成答案。
+- `config.toml`：稳定模式，采用多标签路由 + BM25/OCR/Chinese-CLIP + 加权 RRF + Qwen2.5-VL。
+- `config.qwen3-vl.toml`：升级模式，事实题保留低延迟 BM25 路径，OCR题启用独立OCR召回，视觉题才用片段文本与有序关键帧进行 Qwen3-VL 召回和精排。
+
+四项升级的字段、路由和拒答规则见 [`docs/GROUNDED_MULTIMODAL_PIPELINE_ZH.md`](docs/GROUNDED_MULTIMODAL_PIPELINE_ZH.md)。
 
 ## 项目结构
 
@@ -90,6 +97,13 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 python -m pytest -q
 python scripts/run_demo.py
+```
+
+完整视频预处理需要安装模型、视频和OCR依赖；旧 JSONL 仍可读取，但只有重新预处理后才会包含OCR和语义切片字段：
+
+```bash
+python -m pip install -e ".[models,video,ocr]"
+python scripts/prepare_videos.py --input data/raw --output artifacts/segments.semantic.jsonl
 ```
 
 示例请求：
