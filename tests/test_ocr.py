@@ -71,3 +71,39 @@ def test_incremental_enrichment_reuses_physical_frames_across_overlaps():
 
     assert extractor.frame_count == 1
     assert [segment.ocr_text for segment in enriched] == ["直播", "直播"]
+
+
+def test_paddle_v3_array_like_polygons_do_not_require_boolean_coercion(tmp_path: Path):
+    class ArrayLike(list):
+        def __bool__(self):
+            raise ValueError("ambiguous truth value")
+
+    class FakeV3Engine:
+        def predict(self, path):
+            del path
+            polygon = ArrayLike(
+                [
+                    ArrayLike([0, 0]),
+                    ArrayLike([10, 0]),
+                    ArrayLike([10, 4]),
+                    ArrayLike([0, 4]),
+                ]
+            )
+            return [
+                {
+                    "res": {
+                        "rec_texts": ["屏幕文字"],
+                        "rec_scores": [0.91],
+                        "dt_polys": ArrayLike([polygon]),
+                    }
+                }
+            ]
+
+    frame_path = tmp_path / "frame.jpg"
+    frame_path.write_bytes(b"frame")
+    extractor = PaddleOCRExtractor(engine_factory=lambda **kwargs: FakeV3Engine())
+
+    items = extractor.extract([Keyframe(2.0, str(frame_path))])
+
+    assert items[0].text == "屏幕文字"
+    assert items[0].bbox == ((0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (0.0, 4.0))

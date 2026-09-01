@@ -26,7 +26,8 @@ def _parse_prediction_result(result: Any) -> list[tuple[str, float, Any]]:
         scores = values.get("rec_scores") if isinstance(values, dict) else None
         polygons = values.get("dt_polys") if isinstance(values, dict) else None
         if texts is not None and scores is not None:
-            polygons = polygons or [()] * len(texts)
+            if polygons is None:
+                polygons = [()] * len(texts)
             parsed.extend(zip(texts, scores, polygons, strict=False))
             continue
         rows = item if isinstance(item, list) else ()
@@ -96,10 +97,11 @@ class PaddleOCRExtractor:
                 score = float(confidence)
                 if not normalized or score < self.minimum_confidence:
                     continue
+                points = () if polygon is None else polygon
                 bbox = tuple(
                     (float(point[0]), float(point[1]))
-                    for point in (polygon or ())
-                    if isinstance(point, (list, tuple)) and len(point) >= 2
+                    for point in points
+                    if hasattr(point, "__len__") and len(point) >= 2
                 )
                 extracted.append(
                     OCRText(
