@@ -106,6 +106,14 @@ python -m pip install -e ".[models,video,ocr]"
 python scripts/prepare_videos.py --input data/raw --output artifacts/segments.semantic.jsonl
 ```
 
+已有片段可只补OCR而不重复运行ASR和视觉描述：
+
+```bash
+python scripts/enrich_ocr.py \
+  --segments artifacts/segments.jsonl \
+  --output artifacts/segments.ocr.jsonl
+```
+
 示例请求：
 
 ```bash

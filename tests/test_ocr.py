@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from scripts.enrich_ocr import enrich_segments
 from video_rag.ingestion.ocr import PaddleOCRExtractor, deduplicate_ocr
 from video_rag.retrieval import OCRBM25Retriever
 from video_rag.schemas import Keyframe, OCRText, VideoSegment
@@ -48,3 +49,25 @@ def test_independent_ocr_retriever_does_not_search_asr():
     )
 
     assert [hit.segment_id for hit in retriever.search("增长 12%", 5)] == ["s2"]
+
+
+def test_incremental_enrichment_reuses_physical_frames_across_overlaps():
+    class RecordingExtractor:
+        def __init__(self):
+            self.frame_count = 0
+
+        def extract(self, frames):
+            self.frame_count += len(frames)
+            return [OCRText(frame.timestamp, "直播", 0.9) for frame in frames]
+
+    frame = Keyframe(17, "shared.jpg")
+    segments = [
+        VideoSegment("s1", "v1", "v1.mp4", 0, 20, keyframes=(frame,)),
+        VideoSegment("s2", "v1", "v1.mp4", 15, 35, keyframes=(frame,)),
+    ]
+    extractor = RecordingExtractor()
+
+    enriched = enrich_segments(segments, extractor)
+
+    assert extractor.frame_count == 1
+    assert [segment.ocr_text for segment in enriched] == ["直播", "直播"]

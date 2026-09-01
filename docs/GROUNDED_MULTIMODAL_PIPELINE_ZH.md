@@ -15,6 +15,8 @@ python scripts/prepare_videos.py \
 
 `--skip-ocr`可用于不安装PaddleOCR的兼容运行。旧JSONL没有`ocr_text`和`ocr_items`时仍可加载，但OCR检索结果为空。
 
+已有片段可以运行`python scripts/enrich_ocr.py`复用全部物理关键帧增量补充OCR；脚本强制写入新文件，不覆盖源数据。切换到新片段文件后，应为该文件重新构建或刷新匹配的索引manifest。
+
 ## 多标签路由
 
 路由器可以同时返回`text`、`visual`、`ocr`、`multimodal`和`temporal`。运行时仅调用权重大于0的检索器；OCR问题优先`ocr_bm25`，视觉问题优先视觉向量，显式跨模态问题取各模态权重的最大值。`temporal`标签不额外启动模型，而是扩大前后邻居范围。

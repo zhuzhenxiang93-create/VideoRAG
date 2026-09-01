@@ -127,11 +127,16 @@ class AdaptiveFusionPolicy:
             self.ocr_query_vision_weight,
             self.ocr_query_ocr_weight,
         )
-        routes = [text_route]
-        if "visual" in labels or "multimodal" in labels:
-            routes.append(visual_route)
-        if "ocr" in labels or "multimodal" in labels:
-            routes.append(ocr_route)
+        if "multimodal" in labels:
+            routes = [text_route, visual_route, ocr_route]
+        else:
+            routes = []
+            if "visual" in labels:
+                routes.append(visual_route)
+            if "ocr" in labels:
+                routes.append(ocr_route)
+            if not routes:
+                routes.append(text_route)
         combined = tuple(max(values) for values in zip(*routes, strict=True))
         sources = (self.sparse_source, self.text_source, self.vision_source, self.ocr_source)
         weights = {
