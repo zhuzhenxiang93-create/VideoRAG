@@ -104,14 +104,11 @@ class Qwen3Reranker:
         try:
             import gc
 
-            gc.collect()
-            if "torch" in globals() and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            else:
-                import torch
+            import torch
 
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         except ImportError:
             pass
 
@@ -194,6 +191,7 @@ class QwenVLService:
         self._processor = None
         try:
             import gc
+
             import torch
 
             gc.collect()
@@ -201,6 +199,74 @@ class QwenVLService:
                 torch.cuda.empty_cache()
         except ImportError:
             pass
+
+
+class Qwen3VLService(QwenVLService):
+    """Qwen3-VL service using the current Transformers image-to-text interface."""
+
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen3-VL-4B-Instruct",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(model_name, **kwargs)
+
+    def _load(self):
+        if self._model is None:
+            try:
+                import torch
+                from transformers import AutoModelForImageTextToText, AutoProcessor
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Qwen3-VL requires torch and transformers>=4.57.3"
+                ) from exc
+            self._processor = AutoProcessor.from_pretrained(self.model_name)
+            dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+            self._model = AutoModelForImageTextToText.from_pretrained(
+                self.model_name,
+                torch_dtype=dtype,
+                device_map=self.device_map,
+            ).eval()
+        return self._model, self._processor
+
+    def infer(self, content: list[dict[str, Any]], *, max_new_tokens: int | None = None) -> str:
+        import torch
+
+        model, processor = self._load()
+        normalized_content: list[dict[str, Any]] = []
+        fps: float | None = None
+        for item in content:
+            normalized = dict(item)
+            if normalized["type"] == "video" and "sample_fps" in normalized:
+                fps = float(normalized.pop("sample_fps"))
+            normalized_content.append(normalized)
+        messages = [{"role": "user", "content": normalized_content}]
+        template_kwargs: dict[str, Any] = {}
+        if fps is not None:
+            template_kwargs["fps"] = fps
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+            **template_kwargs,
+        ).to(model.device)
+        with torch.inference_mode():
+            generated = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens or self.max_new_tokens,
+                do_sample=False,
+            )
+        trimmed = [
+            output[len(source) :]
+            for source, output in zip(inputs.input_ids, generated, strict=True)
+        ]
+        return processor.batch_decode(
+            trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )[0].strip()
 
 
 class QwenVLCaptioner:
@@ -235,23 +301,38 @@ class QwenVLEvidenceGenerator:
         service: QwenVLService,
         *,
         max_images: int = 6,
+        evidence_mode: str = "images",
+        max_frames: int = 16,
+        video_fps: float = 1.0,
         unload_after_generate: bool = False,
     ) -> None:
+        if evidence_mode not in {"images", "frame_sequence"}:
+            raise ValueError("evidence_mode must be 'images' or 'frame_sequence'")
         self.service = service
         self.max_images = max_images
+        self.evidence_mode = evidence_mode
+        self.max_frames = max_frames
+        self.video_fps = video_fps
         self.unload_after_generate = unload_after_generate
 
     def generate(self, query: str, segments: list[VideoSegment]) -> str:
         content: list[dict[str, Any]] = []
         evidence_text: list[str] = []
         image_count = 0
+        ordered_frames: list[str] = []
         for segment in segments:
             evidence_text.append(
                 f"[{segment.segment_id}] Time {segment.start_time:.1f}-{segment.end_time:.1f} seconds\n"
                 f"{segment.searchable_text}"
             )
             for frame in segment.keyframes:
-                if image_count >= self.max_images or not Path(frame.path).exists():
+                if not Path(frame.path).exists():
+                    continue
+                if self.evidence_mode == "frame_sequence":
+                    if frame.path not in ordered_frames and len(ordered_frames) < self.max_frames:
+                        ordered_frames.append(frame.path)
+                    continue
+                if image_count >= self.max_images:
                     continue
                 content.append(
                     {
@@ -261,6 +342,14 @@ class QwenVLEvidenceGenerator:
                     }
                 )
                 image_count += 1
+        if self.evidence_mode == "frame_sequence" and ordered_frames:
+            content.append(
+                {
+                    "type": "video",
+                    "video": ordered_frames,
+                    "sample_fps": self.video_fps,
+                }
+            )
         instruction = (
             "Answer the question using only the candidate video evidence below. "
             "Do not introduce external facts. If the evidence is insufficient, answer exactly: "

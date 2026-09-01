@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from time import perf_counter
 
 from video_rag.retrieval.base import Generator, Reranker, Retriever
@@ -15,24 +15,38 @@ class VideoRAGPipeline:
         retrievers: list[Retriever],
         reranker: Reranker,
         generator: Generator,
-        recall_top_k: int = 20,
+        recall_top_k: int | Mapping[str, int] = 20,
         fusion_top_k: int = 20,
         rerank_top_k: int = 3,
         rrf_k: int = 60,
         minimum_rerank_score: float = 0.20,
+        allow_abstention: bool = True,
     ) -> None:
         if not retrievers:
             raise ValueError("At least one retriever is required")
-        if min(recall_top_k, fusion_top_k, rerank_top_k, rrf_k) <= 0:
+        retriever_names = [retriever.name for retriever in retrievers]
+        if len(retriever_names) != len(set(retriever_names)):
+            raise ValueError("Retriever names must be unique")
+        if isinstance(recall_top_k, int):
+            recall_top_k_by_name = {name: recall_top_k for name in retriever_names}
+        else:
+            missing = set(retriever_names) - set(recall_top_k)
+            if missing:
+                raise ValueError(f"Missing recall_top_k values for: {sorted(missing)}")
+            recall_top_k_by_name = {
+                name: int(recall_top_k[name]) for name in retriever_names
+            }
+        if min(*recall_top_k_by_name.values(), fusion_top_k, rerank_top_k, rrf_k) <= 0:
             raise ValueError("Top-k and RRF k values must be positive")
         self._retrievers = retrievers
         self._reranker = reranker
         self._generator = generator
-        self._recall_top_k = recall_top_k
+        self._recall_top_k_by_name = recall_top_k_by_name
         self._fusion_top_k = fusion_top_k
         self._rerank_top_k = rerank_top_k
         self._rrf_k = rrf_k
         self._minimum_rerank_score = minimum_rerank_score
+        self._allow_abstention = allow_abstention
         self._segments: dict[str, VideoSegment] = {}
 
     def build(self, segments: Iterable[VideoSegment]) -> None:
@@ -60,7 +74,7 @@ class VideoRAGPipeline:
 
         started = perf_counter()
         result_lists = [
-            retriever.search(query, self._recall_top_k)
+            retriever.search(query, self._recall_top_k_by_name[retriever.name])
             for retriever in self._retrievers
         ]
         recalled_at = perf_counter()
@@ -89,7 +103,10 @@ class VideoRAGPipeline:
         )[: self._rerank_top_k]
         reranked_at = perf_counter()
 
-        if not ranked or ranked[0][1] < self._minimum_rerank_score:
+        if not ranked or (
+            self._allow_abstention
+            and ranked[0][1] < self._minimum_rerank_score
+        ):
             return self._abstention(started, recalled_at, fused_at, reranked_at)
 
         selected_segments = [item[0] for item in ranked]

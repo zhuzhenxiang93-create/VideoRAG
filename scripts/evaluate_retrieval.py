@@ -7,17 +7,17 @@ from pathlib import Path
 from statistics import mean, median
 from time import perf_counter
 
-from video_rag.adapters import Qwen3Reranker
+from video_rag.adapters import Qwen3Reranker, Qwen3VLReranker
 from video_rag.config import load_config
 from video_rag.evaluation import evaluate_retrieval
 from video_rag.retrieval import (
+    BM25Retriever,
     ClipVisionRetriever,
-    InMemoryLexicalRetriever,
+    Qwen3VLEmbeddingRetriever,
     QwenTextRetriever,
     reciprocal_rank_fusion,
 )
 from video_rag.storage import load_segments
-
 
 REQUIRED_FIELDS = {
     "question_id",
@@ -75,17 +75,13 @@ def load_questions(path: Path, known_segment_ids: set[str]) -> list[dict]:
 def metrics_with_breakdown(
     predictions: dict[str, list[str]], questions: list[dict]
 ) -> dict[str, object]:
-    ground_truth = {
-        item["question_id"]: item["relevant_segment_ids"] for item in questions
-    }
+    ground_truth = {item["question_id"]: item["relevant_segment_ids"] for item in questions}
     overall = evaluate_retrieval(predictions, ground_truth)
     by_type: dict[str, dict[str, float]] = {}
     types = sorted({item["question_type"] for item in questions})
     for question_type in types:
         subset = [item for item in questions if item["question_type"] == question_type]
-        subset_truth = {
-            item["question_id"]: item["relevant_segment_ids"] for item in subset
-        }
+        subset_truth = {item["question_id"]: item["relevant_segment_ids"] for item in subset}
         by_type[question_type] = evaluate_retrieval(predictions, subset_truth)
     return {"overall": overall, "by_question_type": by_type}
 
@@ -96,8 +92,12 @@ def main() -> None:
     parser.add_argument("--segments", default=Path("artifacts/segments.jsonl"), type=Path)
     parser.add_argument("--index-dir", default=Path("artifacts/indexes"), type=Path)
     parser.add_argument("--config", default=Path("config.toml"), type=Path)
-    parser.add_argument("--output", default=Path("artifacts/evaluation/retrieval_ablation.json"), type=Path)
-    parser.add_argument("--csv-output", default=Path("artifacts/evaluation/retrieval_ablation.csv"), type=Path)
+    parser.add_argument(
+        "--output", default=Path("artifacts/evaluation/retrieval_ablation.json"), type=Path
+    )
+    parser.add_argument(
+        "--csv-output", default=Path("artifacts/evaluation/retrieval_ablation.csv"), type=Path
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--top-k", default=20, type=int)
     parser.add_argument("--with-reranker", action="store_true")
@@ -110,14 +110,24 @@ def main() -> None:
     segments = load_segments(args.segments)
     segment_by_id = {item.segment_id: item for item in segments}
     questions = load_questions(args.questions, set(segment_by_id))
+    if config.retrieval.vision_backend == "qwen3_vl":
+        vision_retriever = Qwen3VLEmbeddingRetriever(
+            config.models.qwen3_vl_embedding,
+            implementation_repository=config.models.qwen3_vl_repository,
+            index_dir=args.index_dir,
+            max_frames=config.generation.max_frames,
+            fps=config.generation.video_fps,
+        )
+    else:
+        vision_retriever = ClipVisionRetriever(
+            config.models.clip, device=args.device, index_dir=args.index_dir
+        )
     retrievers = {
-        "bm25": InMemoryLexicalRetriever(),
+        "bm25": BM25Retriever(),
         "embedding": QwenTextRetriever(
             config.models.text_embedding, device=args.device, index_dir=args.index_dir
         ),
-        "clip": ClipVisionRetriever(
-            config.models.clip, device=args.device, index_dir=args.index_dir
-        ),
+        "clip": vision_retriever,
     }
     for retriever in retrievers.values():
         retriever.build(segments)
@@ -148,9 +158,16 @@ def main() -> None:
         all_candidates[question_id] = predictions["all_rrf"][question_id]
 
     if args.with_reranker:
-        reranker = Qwen3Reranker(
-            config.models.reranker, unload_after_score=args.low_vram
-        )
+        if config.retrieval.reranker_backend == "qwen3_vl":
+            reranker = Qwen3VLReranker(
+                config.models.qwen3_vl_reranker,
+                implementation_repository=config.models.qwen3_vl_repository,
+                max_frames=config.generation.max_frames,
+                fps=config.generation.video_fps,
+                unload_after_score=args.low_vram,
+            )
+        else:
+            reranker = Qwen3Reranker(config.models.reranker, unload_after_score=args.low_vram)
         predictions["all_rrf+reranker"] = {}
         latency["all_rrf+reranker"] = []
         first_question = questions[0]
@@ -194,11 +211,24 @@ def main() -> None:
     args.csv_output.parent.mkdir(parents=True, exist_ok=True)
     with args.csv_output.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(("route", "recall@1", "recall@5", "recall@10", "mrr", "ndcg@5", "mean_ms", "p95_ms"))
+        writer.writerow(
+            ("route", "recall@1", "recall@5", "recall@10", "mrr", "ndcg@5", "mean_ms", "p95_ms")
+        )
         for name, result in results.items():
             metrics = result["overall"]
             timings = result["latency_ms"]
-            writer.writerow((name, metrics["recall@1"], metrics["recall@5"], metrics["recall@10"], metrics["mrr"], metrics["ndcg@5"], timings["mean"], timings["p95"]))
+            writer.writerow(
+                (
+                    name,
+                    metrics["recall@1"],
+                    metrics["recall@5"],
+                    metrics["recall@10"],
+                    metrics["mrr"],
+                    metrics["ndcg@5"],
+                    timings["mean"],
+                    timings["p95"],
+                )
+            )
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

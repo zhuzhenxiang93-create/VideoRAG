@@ -15,7 +15,7 @@
                                                      │
              ┌───────────────────┬───────────────────┴───────────────────┐
              ▼                   ▼                                       ▼
-      BM25-like 稀疏召回   Qwen3-Embedding + FAISS        Chinese-CLIP + FAISS
+       Okapi BM25 稀疏召回  Qwen3-Embedding + FAISS        Chinese-CLIP + FAISS
              └───────────────────┴───────────────────┬───────────────────┘
                                                      ▼
                                                RRF 排名融合
@@ -33,8 +33,10 @@
 - Whisper 保留 ASR 片段时间戳，并与 20 秒滑动窗口自动对齐。
 - 每秒采样视频，结合场景变化、Laplacian 清晰度和时间去重选择关键帧。
 - Qwen2.5-VL 生成客观关键帧描述，并基于最终证据完成一次性多模态生成。
-- BM25-like、Qwen3-Embedding、Chinese-CLIP 三路召回，使用 RRF 避免异构分数直接标定。
+- 标准 Okapi BM25（含文档长度归一化）、Qwen3-Embedding、Chinese-CLIP 三路召回，使用 RRF 避免异构分数直接标定。
+- 三路召回分别使用 `sparse_top_k`、`text_top_k` 和 `vision_top_k`，便于独立调参与消融。
 - Qwen3-Reranker 对融合候选精排，低于置信度阈值时拒答。
+- 可选 Qwen3-VL-Embedding、Qwen3-VL-Reranker 和 Qwen3-VL 生成端到端升级路径；旧模型配置仍可直接运行。
 - 所有向量转为 L2 归一化 `float32`，使用 FAISS `IndexFlatIP` 实现余弦相似度精确检索。
 - 索引 manifest 记录模型、维度、条目数、相似度定义和文件 SHA-256，启动时拒绝不一致索引。
 - Flask API 返回结构化证据，网页播放器支持跳转到证据 `start_time`。
@@ -52,6 +54,11 @@
 | 视觉描述与答案生成 | `Qwen/Qwen2.5-VL-7B-Instruct` |
 
 配置集中在 [`config.toml`](config.toml)。
+
+仓库提供两套可切换配置：
+
+- `config.toml`：兼容模式，采用 BM25 + Qwen3 文本向量 + Chinese-CLIP + 文本 Reranker + Qwen2.5-VL。
+- `config.qwen3-vl.toml`：升级模式，视觉召回和精排都联合使用片段文本与有序关键帧，并由 Qwen3-VL 对关键帧序列生成答案。
 
 ## 项目结构
 
@@ -130,6 +137,17 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[models,video]"
 ```
 
+如果使用 Qwen3-VL 升级配置，安装额外依赖并克隆官方实现：
+
+```bash
+python -m pip install -e ".[models,video,qwen3]"
+git clone https://github.com/QwenLM/Qwen3-VL-Embedding.git \
+  /root/autodl-tmp/Qwen3-VL-Embedding
+python -m pip install -e /root/autodl-tmp/Qwen3-VL-Embedding
+```
+
+`config.qwen3-vl.toml` 中的 `qwen3_vl_repository` 必须指向这个官方仓库。适配器只动态调用官方的 `Qwen3VLEmbedder` 和 `Qwen3VLReranker`，本项目不复制或修改其源码。
+
 ### 1. 获取开放许可视频（可选）
 
 ```bash
@@ -160,6 +178,15 @@ python scripts/build_indexes.py \
   --index-dir artifacts/indexes
 ```
 
+升级模式需要用独立配置重建索引；构建脚本会生成 schema v3 manifest，记录文本与多模态索引各自的模型和哈希：
+
+```bash
+python scripts/build_indexes.py \
+  --segments artifacts/segments.jsonl \
+  --index-dir artifacts/indexes-qwen3-vl \
+  --config config.qwen3-vl.toml
+```
+
 ### 4. 启动真实服务
 
 ```bash
@@ -168,7 +195,16 @@ python scripts/run_server.py --host 127.0.0.1 --port 5000
 
 # 24 GB 显存：精排后卸载 Reranker，再加载 Qwen-VL
 python scripts/run_server.py --host 127.0.0.1 --port 5000 --low-vram
+
+# Qwen3-VL 升级模式
+python scripts/run_server.py \
+  --segments artifacts/segments.jsonl \
+  --index-dir artifacts/indexes-qwen3-vl \
+  --config config.qwen3-vl.toml \
+  --host 127.0.0.1 --port 5000 --low-vram
 ```
+
+升级模式的 `frame_sequence` 会按证据片段顺序把最多 16 张关键帧作为一个视频帧序列交给 Qwen3-VL，同时附上 Top-3 片段的 ASR、视觉描述、片段 ID、起止时间和原始问题。它不是把整段原视频无裁剪地塞进模型，因此能控制视觉 token 和显存开销，也不会丢失证据时间戳。
 
 开发服务默认只绑定本机。远程使用建议通过 SSH 隧道访问；如需公网部署，应增加反向代理、认证、限流和生产级 WSGI 服务。
 

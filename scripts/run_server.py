@@ -3,12 +3,24 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from video_rag.adapters import Qwen3Reranker, QwenVLEvidenceGenerator, QwenVLService
+from video_rag.adapters import (
+    Qwen3Reranker,
+    Qwen3VLReranker,
+    Qwen3VLService,
+    QwenVLEvidenceGenerator,
+    QwenVLService,
+)
 from video_rag.api import create_app
 from video_rag.config import load_config
-from video_rag.index_manifest import validate_manifest
+from video_rag.index_manifest import validate_manifest, validate_runtime_manifest
 from video_rag.pipeline import VideoRAGPipeline
-from video_rag.retrieval import ClipVisionRetriever, InMemoryLexicalRetriever, QwenTextRetriever
+from video_rag.retrieval import (
+    BM25Retriever,
+    ClipVisionRetriever,
+    InMemoryLexicalRetriever,
+    Qwen3VLEmbeddingRetriever,
+    QwenTextRetriever,
+)
 from video_rag.storage import load_segments
 
 
@@ -21,41 +33,99 @@ def build_real_pipeline(
     low_vram: bool = False,
 ) -> VideoRAGPipeline:
     config = load_config(config_path)
-    validate_manifest(
-        segments_path=segments_path,
-        index_dir=index_dir,
-        text_model=config.models.text_embedding,
-        clip_model=config.models.clip,
+    if config.retrieval.vision_backend == "chinese_clip":
+        validate_manifest(
+            segments_path=segments_path,
+            index_dir=index_dir,
+            text_model=config.models.text_embedding,
+            clip_model=config.models.clip,
+        )
+    else:
+        validate_runtime_manifest(
+            segments_path=segments_path,
+            index_dir=index_dir,
+            index_models={
+                "text_dense": config.models.text_embedding,
+                "vision_multimodal_qwen3_vl": config.models.qwen3_vl_embedding,
+            },
+        )
+
+    sparse_retriever = (
+        BM25Retriever()
+        if config.retrieval.sparse_backend == "bm25"
+        else InMemoryLexicalRetriever()
     )
-    service = QwenVLService(config.models.vision_language)
+    if config.retrieval.vision_backend == "qwen3_vl":
+        if not config.models.qwen3_vl_repository:
+            raise ValueError(
+                "models.qwen3_vl_repository is required when vision_backend='qwen3_vl'"
+            )
+        vision_retriever = Qwen3VLEmbeddingRetriever(
+            config.models.qwen3_vl_embedding,
+            implementation_repository=config.models.qwen3_vl_repository,
+            index_dir=index_dir,
+            max_frames=config.generation.max_frames,
+            fps=config.generation.video_fps,
+        )
+    else:
+        vision_retriever = ClipVisionRetriever(
+            config.models.clip,
+            device=device,
+            index_dir=index_dir,
+        )
+
+    if config.retrieval.reranker_backend == "qwen3_vl":
+        if not config.models.qwen3_vl_repository:
+            raise ValueError(
+                "models.qwen3_vl_repository is required when reranker_backend='qwen3_vl'"
+            )
+        reranker = Qwen3VLReranker(
+            config.models.qwen3_vl_reranker,
+            implementation_repository=config.models.qwen3_vl_repository,
+            max_frames=config.generation.max_frames,
+            fps=config.generation.video_fps,
+            unload_after_score=low_vram,
+        )
+    else:
+        reranker = Qwen3Reranker(
+            config.models.reranker,
+            unload_after_score=low_vram,
+        )
+
+    service = (
+        Qwen3VLService(config.models.qwen3_vl_generation)
+        if config.generation.backend == "qwen3_vl"
+        else QwenVLService(config.models.vision_language)
+    )
     pipeline = VideoRAGPipeline(
         retrievers=[
-            InMemoryLexicalRetriever(),
+            sparse_retriever,
             QwenTextRetriever(
                 config.models.text_embedding,
                 device=device,
                 index_dir=index_dir,
             ),
-            ClipVisionRetriever(
-                config.models.clip,
-                device=device,
-                index_dir=index_dir,
-            ),
+            vision_retriever,
         ],
-        reranker=Qwen3Reranker(
-            config.models.reranker,
-            unload_after_score=low_vram,
+        reranker=reranker,
+        generator=QwenVLEvidenceGenerator(
+            service,
+            max_images=config.generation.max_images,
+            evidence_mode=config.generation.evidence_mode,
+            max_frames=config.generation.max_frames,
+            video_fps=config.generation.video_fps,
+            unload_after_generate=low_vram,
         ),
-        generator=QwenVLEvidenceGenerator(service, unload_after_generate=low_vram),
-        recall_top_k=max(
-            config.retrieval.sparse_top_k,
-            config.retrieval.text_top_k,
-            config.retrieval.vision_top_k,
-        ),
+        recall_top_k={
+            sparse_retriever.name: config.retrieval.sparse_top_k,
+            "text_dense": config.retrieval.text_top_k,
+            vision_retriever.name: config.retrieval.vision_top_k,
+        },
         fusion_top_k=config.retrieval.fusion_top_k,
         rerank_top_k=config.retrieval.rerank_top_k,
         rrf_k=config.retrieval.rrf_k,
         minimum_rerank_score=config.generation.minimum_rerank_score,
+        allow_abstention=config.generation.allow_abstention,
     )
     pipeline.build(load_segments(segments_path))
     return pipeline
