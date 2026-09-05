@@ -107,6 +107,31 @@ source env.school.sh
 cd "$VIDEORAG_ROOT"
 ```
 
+在 University of Auckland 服务器上，通过 Slurm 申请一张 A100 并启动真实服务：
+
+```bash
+mkdir -p /data/zzhu126/VideoRAG/logs
+sbatch scripts/run_server.school.sbatch
+squeue -u "$USER"
+```
+
+服务只监听服务器本机。在个人电脑上建立 SSH 隧道后访问
+`http://127.0.0.1:5000`（登录时仍使用学校的一次性 Token）：
+
+```bash
+ssh -L 5000:127.0.0.1:5000 zzhu126@foscsmlprd01.its.auckland.ac.nz
+```
+
+查看日志或取消任务：
+
+```bash
+tail -f /data/zzhu126/VideoRAG/logs/videorag-JOB_ID.out
+scancel JOB_ID
+```
+
+提交任务前必须已有 `artifacts/segments.ocr.jsonl`、`artifacts/indexes-ocr/`
+以及 `config.toml` 所引用模型的本地 Hugging Face 缓存；计算节点不应依赖运行时联网下载。
+
 完整视频预处理需要安装模型、视频和OCR依赖；旧 JSONL 仍可读取，但只有重新预处理后才会包含OCR和语义切片字段：
 
 ```bash
