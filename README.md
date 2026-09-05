@@ -100,6 +100,13 @@ python -m pytest -q
 python scripts/run_demo.py
 ```
 
+学校服务器部署使用数据盘路径，避免占用 home 配额：
+
+```bash
+source env.school.sh
+cd "$VIDEORAG_ROOT"
+```
+
 完整视频预处理需要安装模型、视频和OCR依赖；旧 JSONL 仍可读取，但只有重新预处理后才会包含OCR和语义切片字段：
 
 ```bash
