@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +46,7 @@ def build_manifest(
     vision_name = "vision_dense_zh" if "chinese-clip" in clip_model.lower() else "vision_dense"
     return {
         "schema_version": 2,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "segment_count": segment_count,
         "segments_sha256": file_sha256(segments_path),
         "models": {"text_embedding": text_model, "clip": clip_model},
@@ -109,7 +109,7 @@ def build_runtime_manifest(
     )
     return {
         "schema_version": 3,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "segment_count": segment_count,
         "segments_sha256": file_sha256(segments_path),
         "index_models": index_models,
