@@ -175,6 +175,19 @@ def unwrap_model_features(output: Any) -> Any:
     return output
 
 
+def chinese_clip_text_features(model: Any, inputs: Any) -> Any:
+    """Encode Chinese-CLIP text despite the missing Transformers pooler.
+
+    Some Transformers releases construct ``ChineseCLIPModel.text_model`` with
+    pooling disabled while ``get_text_features`` still expects
+    ``pooler_output``.  Official Chinese-CLIP checkpoints do not contain text
+    pooler weights, so their compatible representation is the CLS token passed
+    through the checkpoint's trained text projection.
+    """
+    text_output = model.text_model(**inputs)
+    return model.text_projection(unwrap_model_features(text_output))
+
+
 class ClipVisionRetriever(FaissDenseRetriever):
     name = "vision_dense"
 
@@ -250,6 +263,9 @@ class ClipVisionRetriever(FaissDenseRetriever):
         model, processor = self._load()
         with torch.inference_mode():
             inputs = processor(text=[query], return_tensors="pt", padding=True).to(self.device)
-            vector = unwrap_model_features(model.get_text_features(**inputs)).float()
+            if "chinese-clip" in self.model_name.lower():
+                vector = chinese_clip_text_features(model, inputs).float()
+            else:
+                vector = unwrap_model_features(model.get_text_features(**inputs)).float()
             vector = vector / vector.norm(dim=-1, keepdim=True)
         return vector.cpu().numpy().astype(np.float32)
