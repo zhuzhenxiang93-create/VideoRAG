@@ -93,10 +93,64 @@ class WhisperTranscriber:
             timed.append(TimedText(float(start), float(end), text))
         return timed
 
+    def transcribe_bounded(
+        self, media_path: str | Path, language: str | None = None, *, seconds: float = 20.0
+    ) -> list[TimedText]:
+        """Decode independent audio blocks so stitching cannot expand timestamps across minutes."""
+        import subprocess
+
+        import numpy as np
+
+        if not 0 < seconds <= 30:
+            raise ValueError("Audio blocks must be between 0 and 30 seconds")
+        decoded = subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-i",
+                str(media_path),
+                "-f",
+                "f32le",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "pipe:1",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        audio = np.frombuffer(decoded.stdout, dtype="<f4")
+        block_samples = int(seconds * 16000)
+        timed = []
+        for offset in range(0, len(audio), block_samples):
+            block = audio[offset : offset + block_samples].copy()
+            duration = len(block) / 16000
+            result = self._load()(
+                {"array": block, "sampling_rate": 16000},
+                return_timestamps=True,
+                generate_kwargs={
+                    "task": "transcribe",
+                    **({"language": language} if language else {}),
+                },
+            )
+            for chunk in result.get("chunks", []):
+                start, end = chunk.get("timestamp") or (None, None)
+                text = str(chunk.get("text", "")).strip()
+                if start is None or not text:
+                    continue
+                start = max(0.0, float(start))
+                end = min(duration, float(end) if end is not None else duration)
+                if end > start:
+                    timed.append(TimedText(offset / 16000 + start, offset / 16000 + end, text))
+        return sorted(timed, key=lambda row: (row.start_time, row.end_time))
+
     def unload(self) -> None:
         self._pipeline = None
         try:
             import gc
+
             import torch
 
             gc.collect()
@@ -149,13 +203,17 @@ class SceneKeyframeExtractor:
                 change = (
                     1.0
                     if previous_histogram is None
-                    else float(cv2.compareHist(previous_histogram, histogram, cv2.HISTCMP_BHATTACHARYYA))
+                    else float(
+                        cv2.compareHist(previous_histogram, histogram, cv2.HISTCMP_BHATTACHARYYA)
+                    )
                 )
                 if previous_histogram is None or change >= self.scene_threshold:
                     sharpness = float(
                         cv2.Laplacian(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
                     )
-                    candidates.append((timestamp, change + np.log1p(sharpness) / 20.0, frame.copy()))
+                    candidates.append(
+                        (timestamp, change + np.log1p(sharpness) / 20.0, frame.copy())
+                    )
                 previous_histogram = histogram
                 timestamp += self.sample_interval_seconds
         finally:
@@ -164,7 +222,9 @@ class SceneKeyframeExtractor:
         limit = max(1, round(info.duration / 60 * self.max_frames_per_minute))
         selected: list[tuple[float, float, Any]] = []
         for candidate in sorted(candidates, key=lambda item: item[1], reverse=True):
-            if all(abs(candidate[0] - existing[0]) >= self.minimum_gap_seconds for existing in selected):
+            if all(
+                abs(candidate[0] - existing[0]) >= self.minimum_gap_seconds for existing in selected
+            ):
                 selected.append(candidate)
             if len(selected) >= limit:
                 break
@@ -175,6 +235,6 @@ class SceneKeyframeExtractor:
         for frame_number, (frame_time, _, frame) in enumerate(selected):
             frame_path = destination / f"{stem}_{frame_number:04d}_{frame_time:.3f}.jpg"
             if not cv2.imwrite(str(frame_path), frame):
-                raise IOError(f"Failed to save frame: {frame_path}")
+                raise OSError(f"Failed to save frame: {frame_path}")
             frames.append(Keyframe(timestamp=frame_time, path=str(frame_path)))
         return frames

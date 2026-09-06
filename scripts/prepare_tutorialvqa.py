@@ -29,12 +29,12 @@ for vid in IDS:
     info = probe_video(path)
     out = ROOT / vid
     out.mkdir(exist_ok=True)
-    asr_path = out / "whisper.json"
+    asr_path = out / "whisper.bounded.json"
     if asr_path.exists():
         transcript = [TimedText(**r) for r in json.loads(asr_path.read_text())]
     else:
         print("WHISPER", vid, flush=True)
-        transcript = whisper.transcribe(path, language="en")
+        transcript = whisper.transcribe_bounded(path, language="en", seconds=20)
         assert transcript, f"Empty Whisper output for {vid}"
         asr_path.write_text(
             json.dumps([asdict(r) for r in transcript], ensure_ascii=False, indent=2)
@@ -79,7 +79,7 @@ for vid in IDS:
             "duration": info.duration,
             "frames": len(frames),
             "asr_chunks": len(transcript),
-            "transcript_source": "Whisper openai/whisper-small, language=en",
+            "transcript_source": "Whisper openai/whisper-small, language=en, independent 20-second audio",
         }
     )
     print("PREPARED", catalog[-1], flush=True)
