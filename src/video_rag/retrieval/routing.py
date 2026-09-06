@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 
 DEFAULT_VISUAL_PATTERNS = (
+    r"\b(?:what colou?r|look like|appearance|icon|visible|on.screen|shown)\b",
     r"画面(?:中|里|上)?",
     r"图(?:片|像)?(?:中|里|上)",
     r"什么颜色|哪种颜色|何种颜色",
@@ -11,21 +12,25 @@ DEFAULT_VISUAL_PATTERNS = (
     r"(?:看到|看见|出现|举着|拿着|冲击)(?:了|的|什么|哪)",
 )
 DEFAULT_OCR_PATTERNS = (
+    r"\b(?:button|parameter|setting|menu|label|text|value|dialog|dropdown)\b",
     r"OCR|字幕(?:上|中|里)?(?:写|显示|出现|是)",
     r"屏幕(?:上|中|里)?.*(?:文字|数字|写着|显示)",
     r"(?:标题|标牌|横幅|右下角|左下角|右上角|左上角).*(?:文字|字样|数字|名称|写)",
     r"写着什么|显示的(?:文字|数字|名称)|文字内容",
 )
 DEFAULT_MULTIMODAL_PATTERNS = (
+    r"\b(?:shown.*(?:says|explains)|screen.*narration)\b",
     r"结合(?:画面|图表|字幕|解说|语音)",
     r"(?:画面|图表|字幕).*(?:解说|提到|说)",
     r"(?:解说|语音).*(?:画面|图表|字幕)",
 )
 DEFAULT_TEMPORAL_PATTERNS = (
+    r"\b(?:before|after|next|first|last|sequence|steps|then)\b",
     r"随后|之后|之前|接下来|最初|最后",
     r"先.*再|顺序|过程|前后|发生了什么变化",
 )
 DEFAULT_SEMANTIC_PATTERNS = (
+    r"\b(?:summari[sz]e|overview|main idea)\b",
     r"概括|总结|摘要|大意|主旨|核心观点|主要内容",
     r"(?:这段|视频|讲话|演讲|报道).*(?:讲了什么|讨论什么|主要讲)",
 )

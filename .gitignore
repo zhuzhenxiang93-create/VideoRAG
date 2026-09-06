@@ -19,3 +19,5 @@ data/processed/
 *.mp4
 *.webm
 *.ogv
+
+.runtime-ocr/

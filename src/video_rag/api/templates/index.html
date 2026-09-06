@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>多模态视频问答</title>
+  <title>教程视频查证助手</title>
   <style>
     :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", sans-serif; }
     body { margin: 0; background: #0b1020; color: #e8ecf4; }
@@ -24,16 +24,19 @@
 </head>
 <body>
 <main>
-  <h1>多模态视频问答</h1>
+  <h1>教程视频查证助手</h1>
   <div class="grid">
     <section class="card">
       <video id="player" controls preload="metadata"></video>
       <p id="nowPlaying" class="meta">点击证据可跳转到对应视频时间。</p>
     </section>
     <section class="card">
+      <label for="videos">选择视频（可多选）</label>
+      <select id="videos" multiple size="5" style="width:100%;margin:12px 0" aria-label="选择视频"></select>
       <form id="questionForm">
         <input id="question" placeholder="输入关于视频的问题" autocomplete="off">
-        <button id="submit">提问</button>
+        <button id="submit" value="ask">提问</button>
+        <button id="search" value="search">找片段</button>
       </form>
       <div id="answer" class="answer"></div>
       <div id="evidenceList"></div>
@@ -48,6 +51,15 @@
   const evidenceList = document.getElementById("evidenceList");
   const player = document.getElementById("player");
   const nowPlaying = document.getElementById("nowPlaying");
+
+  const videos = document.getElementById("videos");
+  const search = document.getElementById("search");
+  fetch("/api/videos").then(r => { if (!r.ok) throw new Error("视频列表加载失败"); return r.json(); }).then(data => {
+    data.videos.forEach((v, i) => {
+      const option = new Option(v.video_id, v.video_id, false, i === 0);
+      videos.add(option);
+    });
+  }).catch(e => { answer.textContent = e.message; });
 
   function playEvidence(item) {
     const seek = () => {
@@ -68,27 +80,30 @@
     event.preventDefault();
     const question = input.value.trim();
     if (!question) return;
-    submit.disabled = true;
+    const video_ids = Array.from(videos.selectedOptions, o => o.value);
+    if (!video_ids.length) { answer.textContent = "请至少选择一个视频"; return; }
+    const mode = event.submitter?.value === "search" ? "search" : "ask";
+    submit.disabled = search.disabled = true;
     answer.textContent = "正在检索视频证据……";
     evidenceList.replaceChildren();
     try {
-      const response = await fetch("/api/ask", {
+      const response = await fetch(`/api/${mode}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question })
+        body: JSON.stringify({ question, video_ids })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "请求失败");
-      answer.textContent = data.answer;
+      answer.textContent = data.abstained ? "证据不足：" + data.answer : mode === "search" ? `找到 ${data.evidence.length} 个片段` : data.answer;
       data.evidence.forEach((item) => {
         const button = document.createElement("button");
         button.className = "evidence";
         const meta = document.createElement("div");
         meta.className = "meta";
-        meta.textContent = `${item.segment_id} · ${item.start_time.toFixed(1)}–${item.end_time.toFixed(1)} 秒 · 精排 ${item.rerank_score.toFixed(3)}`;
+        meta.textContent = `${item.segment_id} · ${item.start_time.toFixed(1)}–${item.end_time.toFixed(1)} 秒`;
         const transcript = document.createElement("div");
         transcript.className = "transcript";
-        transcript.textContent = item.transcript || item.visual_caption || "无文本证据";
+        transcript.textContent = [item.transcript, item.ocr_text ? "屏幕文字：" + item.ocr_text : "", item.visual_caption].filter(Boolean).join("\n") || "无文本证据";
         button.append(meta, transcript);
         button.addEventListener("click", () => playEvidence(item));
         evidenceList.appendChild(button);
@@ -96,7 +111,7 @@
     } catch (error) {
       answer.textContent = error.message;
     } finally {
-      submit.disabled = false;
+      submit.disabled = search.disabled = false;
     }
   });
 </script>

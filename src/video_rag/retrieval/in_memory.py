@@ -38,7 +38,9 @@ class InMemoryLexicalRetriever:
         for document in self._documents:
             self._document_frequency.update(document.keys())
 
-    def search(self, query: str, top_k: int) -> list[SearchHit]:
+    def search(
+        self, query: str, top_k: int, *, allowed_ids: set[str] | None = None
+    ) -> list[SearchHit]:
         query_tokens = tokenize(query)
         if not query_tokens or not self._segments or top_k <= 0:
             return []
@@ -46,6 +48,8 @@ class InMemoryLexicalRetriever:
         total_documents = len(self._segments)
         scored: list[tuple[str, float]] = []
         for segment, document in zip(self._segments, self._documents, strict=True):
+            if allowed_ids is not None and segment.segment_id not in allowed_ids:
+                continue
             score = 0.0
             for token in query_tokens:
                 frequency = document.get(token, 0)
@@ -53,8 +57,7 @@ class InMemoryLexicalRetriever:
                     continue
                 document_frequency = self._document_frequency[token]
                 inverse_document_frequency = math.log(
-                    1.0 + (total_documents - document_frequency + 0.5)
-                    / (document_frequency + 0.5)
+                    1.0 + (total_documents - document_frequency + 0.5) / (document_frequency + 0.5)
                 )
                 score += inverse_document_frequency * frequency / (frequency + 1.2)
             if score > 0:
@@ -105,7 +108,9 @@ class BM25Retriever:
         for document in self._documents:
             self._document_frequency.update(document.keys())
 
-    def search(self, query: str, top_k: int) -> list[SearchHit]:
+    def search(
+        self, query: str, top_k: int, *, allowed_ids: set[str] | None = None
+    ) -> list[SearchHit]:
         query_tokens = tokenize(query)
         if not query_tokens or not self._segments or top_k <= 0:
             return []
@@ -119,6 +124,8 @@ class BM25Retriever:
             self._document_lengths,
             strict=True,
         ):
+            if allowed_ids is not None and segment.segment_id not in allowed_ids:
+                continue
             score = 0.0
             for token in query_tokens:
                 frequency = document.get(token, 0)
@@ -126,14 +133,11 @@ class BM25Retriever:
                     continue
                 document_frequency = self._document_frequency[token]
                 inverse_document_frequency = math.log(
-                    1.0
-                    + (total_documents - document_frequency + 0.5)
-                    / (document_frequency + 0.5)
+                    1.0 + (total_documents - document_frequency + 0.5) / (document_frequency + 0.5)
                 )
                 length_factor = 1.0 - self.b + self.b * document_length / average_length
                 score += inverse_document_frequency * (
-                    frequency * (self.k1 + 1.0)
-                    / (frequency + self.k1 * length_factor)
+                    frequency * (self.k1 + 1.0) / (frequency + self.k1 * length_factor)
                 )
             if score > 0:
                 scored.append((segment.segment_id, score))

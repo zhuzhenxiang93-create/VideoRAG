@@ -11,3 +11,7 @@ export HF_HUB_DISABLE_XET=1
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export OMP_NUM_THREADS=1
+
+# Reuse the school-installed ffmpeg binary without changing other environments.
+export PATH="$PATH:/data/zzhu126/environments/vbench-tpami/bin"
+export PYTHONPATH="$VIDEORAG_ROOT/.runtime-ocr${PYTHONPATH:+:$PYTHONPATH}"

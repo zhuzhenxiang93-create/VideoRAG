@@ -52,7 +52,7 @@ class Qwen3Reranker:
             ).eval()
             prefix = (
                 "<|im_start|>system\nJudge whether the Document meets the requirements "
-                "based on the Query. The answer can only be \"yes\" or \"no\"."
+                'based on the Query. The answer can only be "yes" or "no".'
                 "<|im_end|>\n<|im_start|>user\n"
             )
             suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
@@ -74,10 +74,7 @@ class Qwen3Reranker:
         import torch
 
         model, tokenizer = self._load()
-        pairs = [
-            f"<Query>: {query}\n<Document>: {self._document(segment)}"
-            for segment in segments
-        ]
+        pairs = [f"<Query>: {query}\n<Document>: {self._document(segment)}" for segment in segments]
         available_length = self.max_length - len(self._prefix_tokens) - len(self._suffix_tokens)
         inputs = tokenizer(
             pairs,
@@ -221,9 +218,7 @@ class Qwen3VLService(QwenVLService):
                 import torch
                 from transformers import AutoModelForImageTextToText, AutoProcessor
             except ImportError as exc:
-                raise RuntimeError(
-                    "Qwen3-VL requires torch and transformers>=4.57.3"
-                ) from exc
+                raise RuntimeError("Qwen3-VL requires torch and transformers>=4.57.3") from exc
             self._processor = AutoProcessor.from_pretrained(self.model_name)
             dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
             self._model = AutoModelForImageTextToText.from_pretrained(
@@ -307,22 +302,16 @@ def parse_generated_answer(raw: str, allowed_segment_ids: set[str]) -> Generated
     try:
         payload = json.loads(candidate)
     except json.JSONDecodeError:
-        citations = tuple(
-            segment_id for segment_id in allowed_segment_ids if segment_id in cleaned
-        )
+        citations = tuple(segment_id for segment_id in allowed_segment_ids if segment_id in cleaned)
         insufficient = (
-            "无法确定" in cleaned
-            or "证据不足" in cleaned
-            or "insufficient" in cleaned.casefold()
+            "无法确定" in cleaned or "证据不足" in cleaned or "insufficient" in cleaned.casefold()
         )
         return GeneratedAnswer(cleaned, not insufficient, citations=citations)
     if not isinstance(payload, dict):
         return GeneratedAnswer(cleaned, False)
     citations_value = payload.get("citations", ())
     citations = (
-        tuple(str(value) for value in citations_value)
-        if isinstance(citations_value, list)
-        else ()
+        tuple(str(value) for value in citations_value) if isinstance(citations_value, list) else ()
     )
     confidence_value = payload.get("confidence")
     try:
@@ -362,39 +351,51 @@ class QwenVLEvidenceGenerator:
     def generate(self, query: str, segments: list[VideoSegment]) -> GeneratedAnswer:
         content: list[dict[str, Any]] = []
         evidence_text: list[str] = []
-        image_count = 0
-        ordered_frames: list[str] = []
+        # Round-robin across relevant segments before sorting selected frames in time.
+        # Canonical paths and (video, timestamp) both identify shared physical frames.
+        selected = []
+        seen_paths, seen_times = set(), set()
+        budget = self.max_frames if self.evidence_mode == "frame_sequence" else self.max_images
         for segment in segments:
             evidence_text.append(
-                f"[{segment.segment_id}] Time {segment.start_time:.1f}-{segment.end_time:.1f} seconds\n"
+                f"[{segment.segment_id}] Video {segment.video_id}, Time {segment.start_time:.1f}-{segment.end_time:.1f} seconds\n"
                 f"{segment.evidence_text}"
             )
-            for frame in segment.keyframes:
-                if not Path(frame.path).exists():
+        for offset in range(max((len(s.keyframes) for s in segments), default=0)):
+            for segment in segments:
+                if offset >= len(segment.keyframes) or len(selected) >= budget:
                     continue
-                if self.evidence_mode == "frame_sequence":
-                    if frame.path not in ordered_frames and len(ordered_frames) < self.max_frames:
-                        ordered_frames.append(frame.path)
+                frame = segment.keyframes[offset]
+                path = Path(frame.path).resolve()
+                identity = (segment.video_id, round(frame.timestamp, 3))
+                if not path.is_file() or path in seen_paths or identity in seen_times:
                     continue
-                if image_count >= self.max_images:
-                    continue
+                seen_paths.add(path)
+                seen_times.add(identity)
+                selected.append((segment, frame))
+        selected.sort(key=lambda pair: (pair[0].video_id, pair[1].timestamp))
+        for segment, frame in selected:
+            content.append(
+                {
+                    "type": "text",
+                    "text": f"Frame: [{segment.segment_id}] video={segment.video_id} time={frame.timestamp:.3f}s",
+                }
+            )
+            if self.evidence_mode == "images":
                 content.append(
-                    {
-                        "type": "image",
-                        "image": frame.path,
-                        "max_pixels": self.service.max_pixels,
-                    }
+                    {"type": "image", "image": frame.path, "max_pixels": self.service.max_pixels}
                 )
-                image_count += 1
-        if self.evidence_mode == "frame_sequence" and ordered_frames:
+        if self.evidence_mode == "frame_sequence" and selected:
             content.append(
                 {
                     "type": "video",
-                    "video": ordered_frames,
+                    "video": [f.path for _, f in selected],
                     "sample_fps": self.video_fps,
                 }
             )
         instruction = (
+            "Answer in the language of the question. Use only the supplied evidence; do not add external facts. "
+            "If the evidence does not answer the specific question, set answerable=false and citations=[]. "
             "仅根据下面候选视频证据回答问题，不得引入外部事实。严格输出一个JSON对象，不要输出Markdown。"
             "字段必须是 answerable(boolean)、answer(string)、confidence(0到1)、citations(string数组)。"
             "citations只能填写确实支持答案的候选segment_id；证据不足时answerable=false、answer填写"

@@ -25,13 +25,40 @@ def create_app(pipeline: VideoRAGPipeline) -> Flask:
         if not isinstance(question, str) or not question.strip():
             return jsonify({"error": "question must be a non-empty string"}), 400
         try:
-            result = pipeline.ask(question)
+            result = (
+                pipeline.ask(question, video_ids=payload["video_ids"])
+                if "video_ids" in payload
+                else pipeline.ask(question)
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 503
         response = result.to_dict()
+        response["status"] = "insufficient_evidence" if result.abstained else "answered"
         for evidence in response["evidence"]:
             evidence["video_url"] = f"/api/videos/{evidence['video_id']}"
         return jsonify(response)
+
+    @app.get("/api/videos")
+    def videos():
+        return jsonify({"videos": pipeline.videos()})
+
+    @app.post("/api/search")
+    def search():
+        payload = request.get_json(silent=True) or {}
+        try:
+            evidence = [
+                e.to_dict()
+                for e in pipeline.search(payload.get("question"), payload.get("video_ids"))
+            ]
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 503
+        for item in evidence:
+            item["video_url"] = f"/api/videos/{item['video_id']}"
+        return jsonify({"evidence": evidence, "answer": "", "status": "search_results"})
 
     @app.get("/api/videos/<video_id>")
     def video(video_id: str):

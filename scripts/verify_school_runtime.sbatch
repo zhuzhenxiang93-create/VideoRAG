@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=videorag-api
+#SBATCH --job-name=videorag-check
 #SBATCH --partition=slurmpartition
 #SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=8
@@ -14,6 +14,7 @@ cd /data/zzhu126/VideoRAG
 source env.school.sh
 mkdir -p "$TMPDIR"
 
+python -u scripts/verify_school_runtime.py
 python scripts/run_server.py \
   --segments "${VIDEORAG_SEGMENTS:-artifacts/segments.ocr.jsonl}" \
   --index-dir "${VIDEORAG_INDEX_DIR:-artifacts/indexes-ocr}" \

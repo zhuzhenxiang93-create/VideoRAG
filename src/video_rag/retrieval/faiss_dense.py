@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 import json
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +71,9 @@ class FaissDenseRetriever(ABC):
         if self.index_dir:
             self.save(self.index_dir)
 
-    def search(self, query: str, top_k: int) -> list[SearchHit]:
+    def search(
+        self, query: str, top_k: int, *, allowed_ids: set[str] | None = None
+    ) -> list[SearchHit]:
         if self._index is None:
             if self.index_dir and (self.index_dir / f"{self.name}.faiss").exists():
                 self.load(self.index_dir)
@@ -80,6 +82,18 @@ class FaissDenseRetriever(ABC):
         if top_k <= 0:
             return []
         vector = normalize_rows(self.encode_query(query))
+        if allowed_ids is not None:
+            positions = [i for i, sid in enumerate(self._segment_ids) if sid in allowed_ids]
+            if not positions:
+                return []
+            # Exact cosine scoring only inside the selected videos, before top-k.
+            vectors = np.stack([self._index.reconstruct(i) for i in positions])
+            scores = (vectors @ vector[0]).tolist()
+            ranked = sorted(zip(positions, scores), key=lambda pair: (-pair[1], pair[0]))[:top_k]
+            return [
+                SearchHit(self._segment_ids[i], float(score), self.name, rank)
+                for rank, (i, score) in enumerate(ranked, 1)
+            ]
         count = min(top_k, len(self._segment_ids))
         scores, indices = self._index.search(vector, count)
         return [
@@ -213,14 +227,16 @@ class ClipVisionRetriever(FaissDenseRetriever):
             try:
                 import torch
                 from transformers import (
-                    CLIPModel,
-                    CLIPProcessor,
                     ChineseCLIPModel,
                     ChineseCLIPProcessor,
+                    CLIPModel,
+                    CLIPProcessor,
                 )
             except ImportError as exc:
                 raise RuntimeError("CLIP retrieval requires torch and transformers") from exc
-            actual_device = self.device if self.device != "cuda" or torch.cuda.is_available() else "cpu"
+            actual_device = (
+                self.device if self.device != "cuda" or torch.cuda.is_available() else "cpu"
+            )
             if "chinese-clip" in self.model_name.lower():
                 model_class = ChineseCLIPModel
                 processor_class = ChineseCLIPProcessor
@@ -246,7 +262,9 @@ class ClipVisionRetriever(FaissDenseRetriever):
                     continue
                 images = [Image.open(path).convert("RGB") for path in paths]
                 try:
-                    inputs = processor(images=images, return_tensors="pt", padding=True).to(self.device)
+                    inputs = processor(images=images, return_tensors="pt", padding=True).to(
+                        self.device
+                    )
                     features = unwrap_model_features(model.get_image_features(**inputs))
                     pooled = features.float().mean(dim=0, keepdim=True)
                     pooled = pooled / pooled.norm(dim=-1, keepdim=True)

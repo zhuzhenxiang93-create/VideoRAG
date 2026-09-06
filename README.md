@@ -344,3 +344,7 @@ python -m ruff check src scripts tests
 ```
 
 测试不会下载或加载大模型，覆盖片段化、查询路由、级联回退、候选并集、RRF 基线、Pipeline、FAISS 数值规范、帧级聚合、索引 manifest、API、数据集验证、split 防泄漏和复核事件生命周期。真实 GPU 验收仍需单独执行完整预处理、建库和问答流程。
+
+## 学校服务器教程 Pipeline
+
+见 [启动命令与实际验收记录](docs/SCHOOL_PIPELINE_STATUS.md)。当前教程数据下载被服务器外网连接阻塞；已完成的新闻模型回归不等同于 TutorialVQA 验收。
