@@ -14,4 +14,4 @@ export OMP_NUM_THREADS=1
 
 # Reuse the school-installed ffmpeg binary without changing other environments.
 export PATH="$PATH:/data/zzhu126/environments/vbench-tpami/bin"
-export PYTHONPATH="$VIDEORAG_ROOT/.runtime-ocr${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$VIDEORAG_ROOT/.runtime-video${PYTHONPATH:+:$PYTHONPATH}"

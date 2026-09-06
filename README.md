@@ -347,4 +347,4 @@ python -m ruff check src scripts tests
 
 ## 学校服务器教程 Pipeline
 
-见 [启动命令与实际验收记录](docs/SCHOOL_PIPELINE_STATUS.md)。当前教程数据下载被服务器外网连接阻塞；已完成的新闻模型回归不等同于 TutorialVQA 验收。
+见 [启动命令与实际验收记录](docs/SCHOOL_PIPELINE_STATUS.md)。已找到学校官方代理并下载教程子集，见 [网络与数据发现记录](docs/SCHOOL_NETWORK_DISCOVERY.md)。教程 GPU 预处理仍待 Slurm 审批；新闻模型回归不等同于 TutorialVQA 验收。

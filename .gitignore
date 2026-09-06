@@ -21,3 +21,8 @@ data/processed/
 *.ogv
 
 .runtime-ocr/
+
+.runtime-browser/
+data/tutorialvqa/
+
+.runtime-video/

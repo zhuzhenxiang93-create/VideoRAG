@@ -1,3 +1,5 @@
+> 最新更新：已找到并验证学校官方代理，数据及 OCR 依赖已准备；见 [网络与数据发现记录](SCHOOL_NETWORK_DISCOVERY.md)。下文网络阻塞结论为此前历史记录。
+
 # 学校服务器启动与验收记录（2026-09-06）
 
 项目 `/data/zzhu126/VideoRAG`，主机 `foscsmlprd01.its.auckland.ac.nz`。
