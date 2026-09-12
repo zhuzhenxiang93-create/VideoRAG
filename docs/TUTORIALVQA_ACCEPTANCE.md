@@ -1,3 +1,5 @@
+> 2026-09-12 更新：作业 16017 已实际执行，但三条教程问题均拒答，浏览器验收在答案断言处中止，完整验收未通过。详见 [实际结果](../reports/tutorialvqa/2026-09-07/README.md)。下文“待运行/等待审批”是提交时的历史状态。
+
 # TutorialVQA 验收进度
 
 项目：`/data/zzhu126/VideoRAG`；本文件记录最新状态。较早新闻验收见 SCHOOL_PIPELINE_STATUS.md，网络发现见 SCHOOL_NETWORK_DISCOVERY.md。

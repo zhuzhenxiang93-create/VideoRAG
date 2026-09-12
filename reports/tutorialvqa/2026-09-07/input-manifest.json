@@ -1,0 +1,47 @@
+[
+  {
+    "video_id": "14643",
+    "duration": 236.8,
+    "asr_chunks": 56,
+    "max_asr_span": 8.400000000000006,
+    "frames": 48,
+    "ocr_items": 447,
+    "transcript_source": "Whisper small, independent 20-second audio blocks; no official transcript or QA labels used"
+  },
+  {
+    "video_id": "14644",
+    "duration": 275.414,
+    "asr_chunks": 69,
+    "max_asr_span": 7.0,
+    "frames": 51,
+    "ocr_items": 414,
+    "transcript_source": "Whisper small, independent 20-second audio blocks; no official transcript or QA labels used"
+  },
+  {
+    "video_id": "14645",
+    "duration": 303.186,
+    "asr_chunks": 66,
+    "max_asr_span": 8.0,
+    "frames": 57,
+    "ocr_items": 369,
+    "transcript_source": "Whisper small, independent 20-second audio blocks; no official transcript or QA labels used"
+  },
+  {
+    "video_id": "14646",
+    "duration": 262.76666666666665,
+    "asr_chunks": 63,
+    "max_asr_span": 9.0,
+    "frames": 53,
+    "ocr_items": 471,
+    "transcript_source": "Whisper small, independent 20-second audio blocks; no official transcript or QA labels used"
+  },
+  {
+    "video_id": "14647",
+    "duration": 300.6333333333333,
+    "asr_chunks": 86,
+    "max_asr_span": 7.0,
+    "frames": 61,
+    "ocr_items": 394,
+    "transcript_source": "Whisper small, independent 20-second audio blocks; no official transcript or QA labels used"
+  }
+]

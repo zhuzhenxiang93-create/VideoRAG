@@ -1,0 +1,19 @@
+{
+  "total": 6195,
+  "exact_annotation_matches": 6195,
+  "single_sentence_spans": 0,
+  "index_origin": "zero-based",
+  "end_boundary": "inclusive",
+  "selected": [
+    "14643",
+    "14644",
+    "14645",
+    "14646",
+    "14647"
+  ],
+  "splits": {
+    "train": 160,
+    "dev": 61,
+    "test": 55
+  }
+}

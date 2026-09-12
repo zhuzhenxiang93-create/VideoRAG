@@ -350,3 +350,5 @@ python -m ruff check src scripts tests
 见 [启动命令与实际验收记录](docs/SCHOOL_PIPELINE_STATUS.md)。已找到学校官方代理并下载教程子集，见 [网络与数据发现记录](docs/SCHOOL_NETWORK_DISCOVERY.md)。教程 GPU 预处理仍待 Slurm 审批；新闻模型回归不等同于 TutorialVQA 验收。
 
 最新教程时间戳修复和验收状态见 [TutorialVQA 验收进度](docs/TUTORIALVQA_ACCEPTANCE.md)。
+
+当前真实验收结果见 [TutorialVQA 运行记录](reports/tutorialvqa/2026-09-07/README.md)：范围检索通过，三条教程问答均拒答，完整 Pipeline 尚未通过。

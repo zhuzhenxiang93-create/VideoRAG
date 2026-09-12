@@ -1,0 +1,67 @@
+{
+  "dataset": "TutorialVQA",
+  "subtitle_source": "real Whisper, bounded audio",
+  "questions": [
+    {
+      "question_id": "dev:1168",
+      "question": "how can i save my file as a pdf file?",
+      "status": 200,
+      "answer": "根据当前视频内容无法确定。",
+      "abstained": true,
+      "citations": [],
+      "scoped": false,
+      "media_range_206": false,
+      "overlap_with_reference": false,
+      "reference_intervals": [
+        {
+          "start_time": 76.27,
+          "end_time": 102.92
+        }
+      ]
+    },
+    {
+      "question_id": "dev:501",
+      "question": "how do i export a specific layer in photoshop? ",
+      "status": 200,
+      "answer": "根据当前视频内容无法确定。",
+      "abstained": true,
+      "citations": [],
+      "scoped": false,
+      "media_range_206": false,
+      "overlap_with_reference": false,
+      "reference_intervals": [
+        {
+          "start_time": 186.45,
+          "end_time": 202.41
+        }
+      ]
+    },
+    {
+      "question_id": "dev:1131",
+      "question": "how do i save my project so i can edit it in photoshop later?",
+      "status": 200,
+      "answer": "根据当前视频内容无法确定。",
+      "abstained": true,
+      "citations": [],
+      "scoped": false,
+      "media_range_206": false,
+      "overlap_with_reference": false,
+      "reference_intervals": [
+        {
+          "start_time": 32.96,
+          "end_time": 48.78
+        }
+      ]
+    }
+  ],
+  "unanswerable": true,
+  "ocr_in_search_evidence": true,
+  "scope_search": {
+    "14643": true,
+    "14644": true,
+    "14645": true,
+    "14646": true,
+    "14647": true
+  },
+  "passed": false
+}

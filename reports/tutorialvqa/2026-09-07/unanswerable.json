@@ -1,0 +1,18 @@
+{
+  "abstained": true,
+  "answer": "根据当前视频内容无法确定。",
+  "citations": [],
+  "confidence": 0.5,
+  "evidence": [],
+  "latency_ms": {
+    "fusion": 0.05840882658958435,
+    "generation": 1351.5053242444992,
+    "recall": 0.25919824838638306,
+    "rerank": 0.014670193195343018,
+    "total": 1351.8376015126705
+  },
+  "route_labels": [
+    "text"
+  ],
+  "status": "insufficient_evidence"
+}
