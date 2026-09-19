@@ -43,3 +43,13 @@ class QwenAdapterTests(unittest.TestCase):
         self.assertTrue(result.answerable)
         self.assertEqual(result.citations, ("s1",))
         self.assertEqual(result.confidence, 0.8)
+
+    def test_structured_generation_parser_normalizes_bracketed_citation_labels(self):
+        result = parse_generated_answer(
+            '{"answerable":true,"answer":"Save as PDF","confidence":0.9,'
+            '"citations":["[14643_0004]"," [14643_0006] "]}',
+            {"14643_0004", "14643_0006"},
+        )
+
+        self.assertTrue(result.answerable)
+        self.assertEqual(result.citations, ("14643_0004", "14643_0006"))

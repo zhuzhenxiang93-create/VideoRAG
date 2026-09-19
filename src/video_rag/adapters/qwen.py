@@ -310,9 +310,15 @@ def parse_generated_answer(raw: str, allowed_segment_ids: set[str]) -> Generated
     if not isinstance(payload, dict):
         return GeneratedAnswer(cleaned, False)
     citations_value = payload.get("citations", ())
-    citations = (
-        tuple(str(value) for value in citations_value) if isinstance(citations_value, list) else ()
-    )
+    citations = ()
+    if isinstance(citations_value, list):
+        normalized = []
+        for value in citations_value:
+            citation = str(value).strip()
+            if citation.startswith("[") and citation.endswith("]"):
+                citation = citation[1:-1].strip()
+            normalized.append(citation)
+        citations = tuple(normalized)
     confidence_value = payload.get("confidence")
     try:
         confidence = float(confidence_value) if confidence_value is not None else None
@@ -398,7 +404,8 @@ class QwenVLEvidenceGenerator:
             "If the evidence does not answer the specific question, set answerable=false and citations=[]. "
             "仅根据下面候选视频证据回答问题，不得引入外部事实。严格输出一个JSON对象，不要输出Markdown。"
             "字段必须是 answerable(boolean)、answer(string)、confidence(0到1)、citations(string数组)。"
-            "citations只能填写确实支持答案的候选segment_id；证据不足时answerable=false、answer填写"
+            "citations只能填写确实支持答案的候选segment_id，必须原样填写ID且不要添加方括号，"
+            "例如 citations=[\"14643_0004\"]；证据不足时answerable=false、answer填写"
             "“根据当前视频内容无法确定。”、citations为空数组。\n\n"
             f"问题：{query}\n\n候选证据：\n" + "\n\n".join(evidence_text)
         )

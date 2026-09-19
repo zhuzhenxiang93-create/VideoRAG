@@ -20,5 +20,6 @@ python -u scripts/run_server.py --segments artifacts/tutorialvqa/bounded-v2/segm
 server_pid=$!
 trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 python -u scripts/verify_tutorial_api.py
-PYTHONPATH="$PWD/.runtime-browser:$PWD/src" PLAYWRIGHT_BROWSERS_PATH="$PWD/.runtime-browser/browsers" python -u scripts/verify_tutorial_browser.py || echo "BROWSER_CHECK_FAILED; see error log"
-wait "$server_pid"
+PYTHONPATH="$PWD:$PWD/.runtime-browser:$PWD/src" PLAYWRIGHT_BROWSERS_PATH="$PWD/.runtime-browser/browsers" python -u scripts/verify_tutorial_browser.py
+kill "$server_pid"
+wait "$server_pid" || true
