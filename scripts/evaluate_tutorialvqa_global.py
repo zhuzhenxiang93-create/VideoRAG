@@ -54,6 +54,10 @@ def main() -> None:
         config_path=args.config, device="cuda",
     )
     pipeline.warmup("software tutorial steps")
+    # Exclude one-time model loading from steady-state latency measurements.
+    pipeline.search(questions[0]["question"], rerank=True)
+    if generated_positions:
+        pipeline.ask(questions[0]["question"])
     segments = load_segments(args.segments)
     known_ids = {s.segment_id for s in segments}
     args.output_dir.mkdir(parents=True, exist_ok=True)

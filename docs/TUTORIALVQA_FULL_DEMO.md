@@ -19,7 +19,7 @@
 
 TutorialVQA 原始数据来自 [官方仓库](https://github.com/acolas1/TutorialVQAData)，视频来自其 [Archive.org 备用镜像](https://archive.org/details/videos_202604)。遵守 CC BY-NC 4.0 研究用途条件；本仓库不提交原视频、模型权重、索引或官方问答 JSON。训练、开发、测试划分保持原样，标准答案和时间标签只用于推理后的评分，不进入索引和模型提示。
 
-在学校服务器 `/data/zzhu126/VideoRAG` 中，先准备已配置的 Python、Whisper、PaddleOCR 和离线模型缓存，再执行：
+在学校服务器 `/data/zzhu126/VideoRAG` 中，先准备 Python 3.10+、ffmpeg、模型依赖、Whisper、PaddleOCR 和 Hugging Face 模型缓存，再执行。其他 GPU 主机可按 `pyproject.toml` 安装 `.[models,video,ocr]`，并把脚本中的路径与 Slurm 资源配置改成自己的环境：
 
 ```bash
 source env.school.sh
