@@ -50,7 +50,10 @@ def create_app(pipeline: VideoRAGPipeline) -> Flask:
         try:
             evidence = [
                 e.to_dict()
-                for e in pipeline.search(payload.get("question"), payload.get("video_ids"))
+                for e in pipeline.search(
+                    payload.get("question"), payload.get("video_ids"),
+                    rerank=payload.get("rerank", False),
+                )
             ]
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400

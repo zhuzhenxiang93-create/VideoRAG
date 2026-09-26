@@ -18,12 +18,14 @@ class Qwen3Reranker:
         model_name: str = "Qwen/Qwen3-Reranker-0.6B",
         *,
         device_map: str = "auto",
-        max_length: int = 8192,
+        max_length: int = 2048,
+        batch_size: int = 4,
         unload_after_score: bool = False,
     ) -> None:
         self.model_name = model_name
         self.device_map = device_map
         self.max_length = max_length
+        self.batch_size = batch_size
         self.unload_after_score = unload_after_score
         self._tokenizer: Any = None
         self._model: Any = None
@@ -67,7 +69,7 @@ class Qwen3Reranker:
         return (
             f"Segment ID: {segment.segment_id}\n"
             f"Time: {segment.start_time:.3f}-{segment.end_time:.3f} seconds\n"
-            f"{segment.searchable_text}"
+            f"{segment.evidence_text}"
         )
 
     def score(self, query: str, segments: list[VideoSegment]) -> list[float]:
@@ -76,23 +78,25 @@ class Qwen3Reranker:
         model, tokenizer = self._load()
         pairs = [f"<Query>: {query}\n<Document>: {self._document(segment)}" for segment in segments]
         available_length = self.max_length - len(self._prefix_tokens) - len(self._suffix_tokens)
-        inputs = tokenizer(
-            pairs,
-            padding=False,
-            truncation=True,
-            max_length=available_length,
-            return_attention_mask=False,
-        )
-        for index, tokens in enumerate(inputs["input_ids"]):
-            inputs["input_ids"][index] = self._prefix_tokens + tokens + self._suffix_tokens
-        inputs = tokenizer.pad(inputs, padding=True, return_tensors="pt")
-        inputs = {name: value.to(model.device) for name, value in inputs.items()}
-        with torch.inference_mode():
-            logits = model(**inputs).logits[:, -1, :]
-            yes = logits[:, self._true_token_id]
-            no = logits[:, self._false_token_id]
-            probabilities = torch.softmax(torch.stack([no, yes], dim=1), dim=1)[:, 1]
-        result = probabilities.float().cpu().tolist()
+        result: list[float] = []
+        for offset in range(0, len(pairs), self.batch_size):
+            inputs = tokenizer(
+                pairs[offset : offset + self.batch_size],
+                padding=False,
+                truncation=True,
+                max_length=available_length,
+                return_attention_mask=False,
+            )
+            for index, tokens in enumerate(inputs["input_ids"]):
+                inputs["input_ids"][index] = self._prefix_tokens + tokens + self._suffix_tokens
+            inputs = tokenizer.pad(inputs, padding=True, return_tensors="pt")
+            inputs = {name: value.to(model.device) for name, value in inputs.items()}
+            with torch.inference_mode():
+                logits = model(**inputs).logits[:, -1, :]
+                yes = logits[:, self._true_token_id]
+                no = logits[:, self._false_token_id]
+                probabilities = torch.softmax(torch.stack([no, yes], dim=1), dim=1)[:, 1]
+            result.extend(probabilities.float().cpu().tolist())
         if self.unload_after_score:
             self.unload()
         return result

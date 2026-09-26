@@ -52,8 +52,8 @@ class VideoRAGPipeline:
             raise ValueError("Top-k and RRF k values must be positive")
         if not 0 <= reranker_weight <= 1:
             raise ValueError("reranker_weight must be between 0 and 1")
-        if retrieval_strategy not in {"cascade", "rrf"}:
-            raise ValueError("retrieval_strategy must be 'cascade' or 'rrf'")
+        if retrieval_strategy not in {"cascade", "hybrid", "rrf"}:
+            raise ValueError("retrieval_strategy must be cascade, hybrid or rrf")
         if not 0 <= minimum_route_confidence <= 1:
             raise ValueError("minimum_route_confidence must be between 0 and 1")
         if not 0 <= minimum_primary_score_margin <= 1:
@@ -235,6 +235,19 @@ class VideoRAGPipeline:
             return hits
 
         retrievers = {retriever.name: retriever for retriever in self._retrievers}
+        if self._retrieval_strategy == "hybrid":
+            # Both lexical and semantic search always contribute candidates.
+            # Additional OCR/vision routes are used only when the question asks for them.
+            names = [name for name in ("bm25", "text_dense") if name in retrievers]
+            labels = set(decision.labels) if decision else set()
+            if "ocr" in labels and "ocr_bm25" in retrievers:
+                names.append("ocr_bm25")
+            if labels & {"visual", "multimodal"}:
+                names.extend(name for name in retrievers if name.startswith("vision_dense"))
+            if not names:
+                raise RuntimeError("Hybrid retrieval requires BM25 or text embeddings")
+            lists = [search(retrievers[name], self._recall_top_k_by_name[name]) for name in names]
+            return ordered_candidate_union(lists, top_k=self._fusion_top_k, interleave=True)
         if self._retrieval_strategy == "rrf":
             source_weights = decision.source_weights if decision else None
             result_lists = [
@@ -379,14 +392,25 @@ class VideoRAGPipeline:
             for vid, segments in sorted(self._segments_by_video.items())
         ]
 
-    def search(self, query: str, video_ids: list[str] | None = None) -> list[Evidence]:
+    def search(
+        self, query: str, video_ids: list[str] | None = None, *, rerank: bool = False
+    ) -> list[Evidence]:
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must not be empty")
         decision = self._fusion_policy.decision(query) if self._fusion_policy else None
         hits = self._retrieve(query.strip(), decision, self._scope(video_ids))
         scores = {hit.segment_id: hit.score for hit in hits}
         candidates = self._deduplicate_candidates([self._segments[h.segment_id] for h in hits])
-        return [Evidence(s, scores[s.segment_id], 0.0) for s in candidates]
+        if not rerank or not candidates:
+            return [Evidence(s, scores[s.segment_id], 0.0) for s in candidates]
+        rerank_scores = self._reranker.score(query, candidates)
+        if len(rerank_scores) != len(candidates):
+            raise ValueError("Reranker must return one score per candidate")
+        ranked = sorted(
+            zip(candidates, rerank_scores, strict=True),
+            key=lambda item: (-item[1], -scores[item[0].segment_id]),
+        )[: self._rerank_top_k]
+        return [Evidence(segment, scores[segment.segment_id], score) for segment, score in ranked]
 
     def video_path(self, video_id: str) -> str | None:
         for segment in self._segments.values():

@@ -124,7 +124,7 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         "retrieval.strategy": (
             config.retrieval.strategy,
-            {"cascade", "rrf"},
+            {"cascade", "hybrid", "rrf"},
         ),
         "retrieval.vision_backend": (
             config.retrieval.vision_backend,

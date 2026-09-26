@@ -31,8 +31,10 @@
       <p id="nowPlaying" class="meta">点击证据可跳转到对应视频时间。</p>
     </section>
     <section class="card">
+      <label><input id="allVideos" type="checkbox" checked> 搜索全部视频</label>
+      <p class="meta">也可取消勾选，限定到一个或多个视频。</p>
       <label for="videos">选择视频（可多选）</label>
-      <select id="videos" multiple size="5" style="width:100%;margin:12px 0" aria-label="选择视频"></select>
+      <select id="videos" multiple size="5" disabled style="width:100%;margin:12px 0" aria-label="选择视频"></select>
       <form id="questionForm">
         <input id="question" placeholder="输入关于视频的问题" autocomplete="off">
         <button id="submit" value="ask">提问</button>
@@ -53,6 +55,8 @@
   const nowPlaying = document.getElementById("nowPlaying");
 
   const videos = document.getElementById("videos");
+  const allVideos = document.getElementById("allVideos");
+  allVideos.addEventListener("change", () => { videos.disabled = allVideos.checked; });
   const search = document.getElementById("search");
   fetch("/api/videos").then(r => { if (!r.ok) throw new Error("视频列表加载失败"); return r.json(); }).then(data => {
     data.videos.forEach((v, i) => {
@@ -81,7 +85,7 @@
     const question = input.value.trim();
     if (!question) return;
     const video_ids = Array.from(videos.selectedOptions, o => o.value);
-    if (!video_ids.length) { answer.textContent = "请至少选择一个视频"; return; }
+    if (!allVideos.checked && !video_ids.length) { answer.textContent = "请至少选择一个视频"; return; }
     const mode = event.submitter?.value === "search" ? "search" : "ask";
     submit.disabled = search.disabled = true;
     answer.textContent = "正在检索视频证据……";
@@ -90,17 +94,18 @@
       const response = await fetch(`/api/${mode}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, video_ids })
+        body: JSON.stringify({ question, ...(allVideos.checked ? {} : { video_ids }), ...(mode === "search" ? { rerank: true } : {}) })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "请求失败");
       answer.textContent = data.abstained ? "证据不足：" + data.answer : mode === "search" ? `找到 ${data.evidence.length} 个片段` : data.answer;
+      if (data.latency_ms?.total != null) answer.textContent += `\n耗时：${(data.latency_ms.total / 1000).toFixed(2)} 秒`;
       data.evidence.forEach((item) => {
         const button = document.createElement("button");
         button.className = "evidence";
         const meta = document.createElement("div");
         meta.className = "meta";
-        meta.textContent = `${item.segment_id} · ${item.start_time.toFixed(1)}–${item.end_time.toFixed(1)} 秒`;
+        meta.textContent = `视频 ${item.video_id} · ${item.start_time.toFixed(1)}–${item.end_time.toFixed(1)} 秒`;
         const transcript = document.createElement("div");
         transcript.className = "transcript";
         transcript.textContent = [item.transcript, item.ocr_text ? "屏幕文字：" + item.ocr_text : "", item.visual_caption].filter(Boolean).join("\n") || "无文本证据";
