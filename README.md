@@ -1,356 +1,98 @@
-# VideoRAG：带时间证据的多模态教程视频问答
+# VideoRAG · 教程视频查证助手
 
-> 教程视频全库问答 Demo：支持直接提问、跨视频 BM25 + Embedding 召回、Qwen3 文本精排、Qwen-VL 证据回答与播放器时间跳转。复现步骤和指标口径见 [TutorialVQA 全库 Demo](docs/TUTORIALVQA_FULL_DEMO.md)。旧中文新闻配置继续保留。
+帮助学习软件操作的人，从一句问题找到操作步骤、屏幕细节和可点击的时间证据。
 
-一个可复现的片段级 VideoRAG 系统，面向教程和操作演示视频：将视频转成带时间戳的 ASR、OCR、关键帧和视觉描述，通过多标签查询路由选择主检索器，仅在低置信度时级联回退；多模态问题对相关通道候选取并集并统一精排。候选经过重叠去重和上下文扩展后，由 Qwen-VL 基于可验证引用生成答案。API 同时返回证据片段、时间范围、路由标签、置信度和阶段延迟。
+![运行中的 CPU 检索预览](docs/media/workspace-desktop.png)
 
-> 当前状态：已处理 TutorialVQA 76 个视频并建立独立索引；已知视频内的官方 Test 检索评测完成。跨视频精排与问答的真实模型评测需要按全库 Demo 文档运行；旧中文新闻配置和诊断数据继续保留。
+**当前状态（2026-09-27）：** 页面、真实 BM25 检索与视频跳转已验收；新全库 GPU 问答和指标仍待学校作业 **19048** 审批。截图是运行中的 **CPU 预览**，不是模型生成答案。[手机截图](docs/media/workspace-mobile.png) · [逐项验收](reports/portfolio/ACCEPTANCE.md)。完整问答录屏尚未完成，见 [演示步骤](docs/DEMO.md)。
 
-## 系统架构
+## 三步完成一次任务
 
-```text
-视频
- ├─ Whisper 时间戳 ASR ─────────────────────────────┐
- ├─ 关键帧 ─ PaddleOCR 时间戳文字 ──────────────────┤
- └─ 场景变化/清晰度关键帧 ─ Qwen-VL 视觉描述 ───────┤
-                                                     ▼
-                              ASR/场景边界感知的语义视频片段
-                                                     │
-                                         查询意图路由
-                           语音/视觉/OCR/多模态/时序
-                                           │
-             ┌───────────────────┬─────────┴─────────┬───────────────────┐
-             ▼                   ▼                                       ▼
-       Okapi BM25      独立 OCR BM25       Qwen3-Embedding / Qwen3-VL
-             └───────────────────┴───────────────────┬───────────────────┘
-                                                     ▼
-                        主检索优先 / 低置信度回退 / 多模态候选并集
-                                                     ▼
-                           可选多模态精排 + 时序邻居上下文扩展
-                                                     ▼
-                                  Qwen-VL 结构化证据约束生成
-                                                     ▼
-                         答案 + 已验证引用 + 时间戳 + 置信度 + 延迟
+1. **输入问题**：例如 “How do I save my design as a PDF?”；默认搜索全部 76 个教程，可主动限定视频。
+2. **阅读并查证**：“提问”生成带引用的答案；只需定位时用“找片段”，不调用生成模型。证据不足则拒答。
+3. **回到操作现场**：点击引用或播放按钮，切换到对应视频和时间；展开 ASR/OCR 核实步骤。
+
+## 我的实现与产品取舍
+
+围绕“找到并核实一步操作”，实现 Flask 工作台、检索/精排/生成编排、视频范围约束、引用校验和时间定位，并区分视频内检索、跨视频检索和问答样本的评测口径。
+
+- 默认全库搜索，避免提前提供正确视频 ID；主动限定范围在召回 Top-K **之前**生效。
+- 答案与视频并列，便于复核；无效引用、低置信度或证据不足时拒答。
+- “找片段”与“提问”分开，减少不必要的生成；显示真实耗时，不编造阶段进度。
+- 复用原生 HTML/CSS/JavaScript 和 Flask，不扩展为视频平台、多租户或复杂 Agent。
+
+[产品案例：用户假设、MVP、指标与实际失败](docs/PRODUCT_CASE.md)
+
+## 架构与职责
+
+```mermaid
+flowchart TD
+    V[教程视频] --> P[Whisper ASR / 英文 OCR / 时间关键帧]
+    P --> I[片段与索引]
+    Q[问题 / 可选范围] --> R[全库 BM25 + Qwen3 Embedding]
+    I --> R
+    R --> C[候选合并 / 时间去重 / 最多20条]
+    C --> T[Qwen3-Reranker-0.6B 文本精排 / Top5]
+    T --> N[邻居上下文 / 关键帧预算]
+    N --> G[Qwen2.5-VL-7B 文本与关键帧生成]
+    G --> X[引用校验 / 拒答]
+    X --> U[答案 + 视频时间证据]
+    T --> S[找片段：不调用生成]
+    S --> U
 ```
 
-## 核心能力
+精排读取 **ASR、OCR 和已有视觉描述文本**，不直接读取图片；Qwen-VL 在生成阶段读取图片。文字问题可追加 OCR BM25，画面问题可追加 English CLIP。当前 76 视频采用 20 秒窗口、5 秒重叠和每 5 秒关键帧，未生成视觉描述；支持字段不代表本批数据已具备。候选采用轮询并集，不混加不同检索器原始分数。
 
-- `VideoSegment` 统一保存视频 ID、源路径、起止时间、ASR、OCR、视觉描述和关键帧。
-- Whisper 保留 ASR 片段时间戳，并与语义窗口自动对齐。
-- PaddleOCR 在关键帧上提取文字、置信度、坐标和时间戳，连续覆盖文字自动去重，并使用独立 `ocr_bm25` 召回。
-- 语义切片优先在 ASR 句末或场景边界结束，同时保留固定窗口兼容模式。
-- 每秒采样视频，结合场景变化、Laplacian 清晰度和时间去重选择关键帧。
-- Qwen2.5-VL 生成客观关键帧描述，并基于最终证据完成一次性多模态生成。
-- 可配置 Okapi BM25、OCR BM25、Qwen3-Embedding、Chinese-CLIP/Qwen3-VL 四路召回；默认 `b=0`，避免片段文本长度差异造成不稳定惩罚。
-- 四路召回分别使用独立 Top-K，便于调参与消融。
-- 多标签路由识别 text、semantic、visual、ocr、multimodal 和 temporal；事实题默认 BM25、概括题默认文本向量、视觉题默认视觉向量、文字读取题默认 OCR。
-- 单模态主检索未达到来源独立阈值时才执行回退；多模态问题轮询合并相关通道候选，避免弱检索器通过固定 RRF 稀释强结果。
-- 重叠候选按时间交并去重；普通问题扩展相邻片段，时序问题使用更宽的前后上下文。
-- 生成端严格返回 `answerable/answer/confidence/citations`；未知引用、无引用、低置信度或证据不足都会触发拒答。
-- 实测文本 Qwen3-Reranker 在当前诊断集产生负收益，因此默认保留融合排序；Qwen3-VL 多模态精排作为可选升级。
-- 可选 Qwen3-VL-Embedding、Qwen3-VL-Reranker 和 Qwen3-VL 生成端到端升级路径；旧模型配置仍可直接运行。
-- 所有向量转为 L2 归一化 `float32`，使用 FAISS `IndexFlatIP` 实现余弦相似度精确检索。
-- 索引 manifest 记录模型、维度、条目数、相似度定义和文件 SHA-256，启动时拒绝不一致索引。
-- Flask API 返回结构化证据，网页播放器支持跳转到证据 `start_time`。
-- Recall@K、MRR、nDCG@K、Exact Match、字符级 Token F1 和分阶段延迟评测。
-- append-only 人工复核事件、revision 冲突检测、事件备份和 video-disjoint split 校验。
-
-## 默认模型
-
-| 阶段 | 模型 |
+| 模块 | 实现 |
 |---|---|
-| ASR | `openai/whisper-small` |
-| OCR | PaddleOCR（中文） |
-| 文本向量 | `Qwen/Qwen3-Embedding-0.6B` |
-| 中文图文向量 | `OFA-Sys/chinese-clip-vit-base-patch16` |
-| 候选精排 | 默认保持融合排序；可选 `Qwen/Qwen3-Reranker-0.6B` |
-| 视觉描述与答案生成 | `Qwen/Qwen2.5-VL-7B-Instruct` |
+| 数据预处理 | [prepare_tutorialvqa_scale.py](scripts/prepare_tutorialvqa_scale.py)、[tutorial_ocr_scale.py](scripts/tutorial_ocr_scale.py) |
+| 编排与范围过滤 | [pipeline.py](src/video_rag/pipeline.py) |
+| API 与页面 | [api](src/video_rag/api) |
+| 全库配置 | [config.tutorialvqa.full-demo.toml](config.tutorialvqa.full-demo.toml) |
+| 评测 | [evaluate_tutorialvqa_global.py](scripts/evaluate_tutorialvqa_global.py) |
 
-配置集中在 [`config.toml`](config.toml)。
+## 实际结果与边界
 
-仓库提供两套可切换配置：
+| 实验 | 数据与口径 | 已有结果 |
+|---|---|---|
+| 历史视频内片段检索 | 76 视频、官方 Test 1,239 问；已传正确视频 ID；Top-5 | Recall@5 **92.17%** |
+| 历史 5 视频问答 | Test 55 问；已知视频范围 | 平均 **3.477 秒**，中位数 3.229 秒，P95 5.723 秒 |
+| 新全库真实模型评测 | 19048 待审批；计划 1,239 问检索、30 问生成样本 | **尚无结果** |
+| 浏览器验收 | 真实 76 视频 BM25 预览；1440/390px | 检索、范围约束、视频切换与定位通过 |
 
-- `config.toml`：稳定模式，采用查询路由级联 + BM25/OCR/文本向量/Chinese-CLIP + Qwen2.5-VL；RRF 仅作为可切换消融基线。
-- `config.qwen3-vl.toml`：升级模式，事实题保留低延迟 BM25 路径，OCR题启用独立OCR召回，视觉题才用片段文本与有序关键帧进行 Qwen3-VL 召回和精排。
+历史 Recall 不是跨视频召回或精排收益；3.48 秒不是新全库端到端延迟。时间命中按“同视频且与官方答案区间正长度重叠”，不等于精确定位。历史问答计时不含浏览器或网络。[历史问答详细报告](reports/tutorialvqa/2026-09-20/full-evaluation.md) · [历史检索原始报告](reports/portfolio/historical-scoped-test.json)。
 
-四项升级的字段、路由和拒答规则见 [`docs/GROUNDED_MULTIMODAL_PIPELINE_ZH.md`](docs/GROUNDED_MULTIMODAL_PIPELINE_ZH.md)。
+新评测分别记录视频 Recall@1/5、时间片段 Recall@1/5、候选池 Recall@20、**同一冻结候选池**精排前后对比、答案 Token F1、引用有效率、证据命中率和平均/中位数/P95 延迟。先预热召回、精排与生成；排除初次加载、网络和网页渲染。30 问只是问答样本。引用合法不等于内容正确，仍需人工看片核实。[协议](docs/TUTORIALVQA_FULL_DEMO.md)
 
-## 项目结构
+## 快速启动
 
-```text
-src/video_rag/
-  adapters/       # CPU 演示与 Qwen 模型适配器
-  api/            # Flask API 与视频证据页面
-  evaluation/     # 检索、答案、数据集和复核事件校验
-  ingestion/      # 视频探测、Whisper ASR、关键帧和片段化
-  retrieval/      # 稀疏、FAISS、物理帧、级联选择与 RRF 基线
-  pipeline.py     # Route -> Cascade/Union -> Rerank -> Generate 编排
-scripts/          # 数据下载、预处理、建库、评测和人工标注工具
-tests/            # 不加载大模型的单元与工作流测试
-data/evaluation/  # 候选问题、复核队列和数据说明
-docs/             # 人工标注规范
-```
-
-## 快速验证（CPU，无需下载大模型）
+真实推理需要 Python 3.10+、FFmpeg、NVIDIA GPU、模型缓存与处理后视频。GitHub 静态页面不能运行推理。学校使用 A100；其他环境建议 24GB+ 显存、64GB RAM、100GB 磁盘起步，实际峰值需实测。
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate             # Windows: .venv\Scripts\activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
-python -m pytest -q
-python scripts/run_demo.py
-```
-
-学校服务器部署使用数据盘路径，避免占用 home 配额：
-
-```bash
+cd /data/zzhu126/VideoRAG
 source env.school.sh
-cd "$VIDEORAG_ROOT"
+squeue -j 19048
+scontrol show job 19048  # 不重复提交既有评测
+# 需要真实服务时单独申请服务作业，仍需批准
+sbatch scripts/run_tutorial_full_demo.school.sbatch
+# CPU 预览：真实 BM25 与播放，提问返回明确 503
+python scripts/run_ui_preview.py --port 5001
 ```
 
-在 University of Auckland 服务器上，通过 Slurm 申请一张 A100 并启动真实服务：
+本机复用已认证连接：
 
 ```bash
-mkdir -p /data/zzhu126/VideoRAG/logs
-sbatch scripts/run_server.school.sbatch
-squeue -u "$USER"
+ssh -S /tmp/videorag-ssh -O forward \
+  -L 15001:127.0.0.1:5001 zzhu126@foscsmlprd01.its.auckland.ac.nz
+# 打开 http://127.0.0.1:15001
 ```
 
-服务只监听服务器本机。在个人电脑上建立 SSH 隧道后访问
-`http://127.0.0.1:5000`（登录时仍使用学校的一次性 Token）：
+[学校命令、Slurm 日志、GPU 启动与其他环境复现](docs/RUNBOOK.md)
 
-```bash
-ssh -L 5000:127.0.0.1:5000 zzhu126@foscsmlprd01.its.auckland.ac.nz
-```
+## 来源、许可、限制与后续
 
-查看日志或取消任务：
+数据来自 [TutorialVQAData](https://github.com/acolas1/TutorialVQAData)，Colas et al., LREC 2020，数据集许可 **CC BY-NC 4.0**。保留署名，仅作非商业研究演示；不提交原视频、权重、索引、缓存、服务器日志或认证信息。
 
-```bash
-tail -f /data/zzhu126/VideoRAG/logs/videorag-JOB_ID.out
-scancel JOB_ID
-```
+公开 PNG 来自本项目运行中的页面，拍摄于播放前，不含原视频帧；第三方教程画面的公开录屏授权未单独确认。[素材说明](docs/media/README.md)
 
-提交任务前必须已有 `artifacts/segments.ocr.jsonl`、`artifacts/indexes-ocr/`
-以及 `config.toml` 所引用模型的本地 Hugging Face 缓存；计算节点不应依赖运行时联网下载。
-
-完整视频预处理需要安装模型、视频和OCR依赖；旧 JSONL 仍可读取，但只有重新预处理后才会包含OCR和语义切片字段：
-
-```bash
-python -m pip install -e ".[models,video,ocr]"
-python scripts/prepare_videos.py --input data/raw --output artifacts/segments.semantic.jsonl
-```
-
-OCR 依赖固定使用 PaddlePaddle 3.2.2；3.3.x 的 CPU oneDNN/PIR 推理路径存在上游兼容问题。
-
-已有片段可只补OCR而不重复运行ASR和视觉描述：
-
-```bash
-python scripts/enrich_ocr.py \
-  --segments artifacts/segments.jsonl \
-  --output artifacts/segments.ocr.jsonl
-```
-
-默认配置的既有向量不包含 OCR，因而向量值无需重算；复制索引并更新片段哈希后即可启用独立 OCR 召回：
-
-```bash
-cp -a artifacts/indexes artifacts/indexes-ocr
-python scripts/refresh_index_manifest.py \
-  --segments artifacts/segments.ocr.jsonl \
-  --index-dir artifacts/indexes-ocr
-python scripts/run_server.py \
-  --segments artifacts/segments.ocr.jsonl \
-  --index-dir artifacts/indexes-ocr \
-  --low-vram
-```
-
-若使用 `config.qwen3-vl.toml`，多模态向量会读取 OCR 证据文本，应改用 `build_indexes.py` 为 `segments.ocr.jsonl` 完整重建新索引。
-
-示例请求：
-
-```bash
-curl -X POST http://127.0.0.1:5000/api/ask \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"CLIP有什么作用？"}'
-```
-
-返回值包含：
-
-```json
-{
-  "answer": "...",
-  "abstained": false,
-  "evidence": [
-    {
-      "segment_id": "demo_0001",
-      "video_id": "demo",
-      "start_time": 15.0,
-      "end_time": 35.0,
-      "transcript": "...",
-      "visual_caption": "...",
-      "fused_score": 0.016,
-      "rerank_score": 0.5,
-      "video_url": "/api/videos/demo"
-    }
-  ],
-  "latency_ms": {
-    "recall": 0.2,
-    "fusion": 0.1,
-    "rerank": 0.1,
-    "generation": 0.1,
-    "total": 0.5
-  }
-}
-```
-
-## GPU 完整复现
-
-建议使用 Ubuntu 22.04、Python 3.11+、FFmpeg、单张 24 GB 以上 NVIDIA GPU、64 GB RAM 和至少 100 GB 磁盘。
-
-```bash
-sudo apt-get update
-sudo apt-get install -y ffmpeg
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[models,video]"
-```
-
-如果使用 Qwen3-VL 升级配置，安装额外依赖并克隆官方实现：
-
-```bash
-python -m pip install -e ".[models,video,qwen3]"
-git clone https://github.com/QwenLM/Qwen3-VL-Embedding.git \
-  /root/autodl-tmp/Qwen3-VL-Embedding
-python -m pip install -e /root/autodl-tmp/Qwen3-VL-Embedding
-```
-
-`config.qwen3-vl.toml` 中的 `qwen3_vl_repository` 必须指向这个官方仓库。适配器只动态调用官方的 `Qwen3VLEmbedder` 和 `Qwen3VLReranker`，本项目不复制或修改其源码。
-
-### 1. 获取开放许可视频（可选）
-
-```bash
-python scripts/download_open_news.py \
-  --output data/raw/open_news_zh \
-  --count 24
-```
-
-下载脚本从 Wikimedia Commons 筛选 Public Domain、CC0 或 CC BY 视频，并在 manifest 中保留来源、许可证和作者信息。原始视频不提交到 Git。
-
-### 2. 预处理视频
-
-```bash
-python scripts/prepare_videos.py \
-  --input data/raw/open_news_zh \
-  --output artifacts/segments.jsonl \
-  --frames-dir artifacts/frames \
-  --language zh
-```
-
-如只验证 ASR 和切片，可增加 `--skip-captions`。
-
-### 3. 构建文本和视觉索引
-
-```bash
-python scripts/build_indexes.py \
-  --segments artifacts/segments.jsonl \
-  --index-dir artifacts/indexes
-```
-
-升级模式需要用独立配置重建索引；构建脚本会生成 schema v3 manifest，记录文本与多模态索引各自的模型和哈希：
-
-```bash
-python scripts/build_indexes.py \
-  --segments artifacts/segments.jsonl \
-  --index-dir artifacts/indexes-qwen3-vl \
-  --config config.qwen3-vl.toml
-```
-
-### 4. 启动真实服务
-
-```bash
-# 默认模式
-python scripts/run_server.py --host 127.0.0.1 --port 5000
-
-# 24 GB 显存：精排后卸载 Reranker，再加载 Qwen-VL
-python scripts/run_server.py --host 127.0.0.1 --port 5000 --low-vram
-
-# Qwen3-VL 升级模式
-python scripts/run_server.py \
-  --segments artifacts/segments.jsonl \
-  --index-dir artifacts/indexes-qwen3-vl \
-  --config config.qwen3-vl.toml \
-  --host 127.0.0.1 --port 5000 --low-vram
-```
-
-升级模式的 `frame_sequence` 会按证据片段顺序把最多 16 张关键帧作为一个视频帧序列交给 Qwen3-VL，同时附上 Top-3 片段的 ASR、视觉描述、片段 ID、起止时间和原始问题。它不是把整段原视频无裁剪地塞进模型，因此能控制视觉 token 和显存开销，也不会丢失证据时间戳。
-
-开发服务默认只绑定本机。远程使用建议通过 SSH 隧道访问；如需公网部署，应增加反向代理、认证、限流和生产级 WSGI 服务。
-
-## 物理帧检索实验
-
-重叠窗口会使同一关键帧出现在多个片段中。`FrameClipVisionRetriever` 以唯一物理帧建库，保存所有片段成员关系，并在查询时使用 `max` 或 `top2_mean` 聚合回片段，避免重复图片编码。
-
-```bash
-python scripts/build_frame_index.py \
-  --segments artifacts/segments.jsonl \
-  --index-dir artifacts/indexes
-
-python scripts/evaluate_visual_granularity.py --help
-python scripts/audit_keyframes.py --help
-```
-
-该实现已经用于受控实验；默认在线服务仍使用稳定的片段均值视觉索引，二者应在正式人工测试集上进一步比较后再切换。
-
-## 检索消融
-
-```bash
-python scripts/evaluate_retrieval.py \
-  --questions data/evaluation/questions.zh.seed.jsonl \
-  --segments artifacts/segments.jsonl \
-  --index-dir artifacts/indexes \
-  --output artifacts/evaluation/retrieval_ablation.json \
-  --csv-output artifacts/evaluation/retrieval_ablation.csv \
-  --with-reranker
-```
-
-脚本输出单路、路由级联、双路/三路 RRF 和可选 Reranker 的 Recall@1/5/10、MRR、nDCG 及延迟。
-
-**评测边界：** 仓库中的 seed、candidate 和 review queue 都是自动生成候选数据，不是人工金标准。它们可用于流程验证和诊断实验，但不能用于对外宣称正式准确率。详细字段和限制见 [`data/evaluation/README.md`](data/evaluation/README.md)。
-
-## 人工复核
-
-候选数据经过实际视频播放和证据核验后，才能标记为 `verified`：
-
-```bash
-python scripts/annotation_server.py \
-  --candidates data/evaluation/questions.zh.review_queue.v1.jsonl \
-  --segments artifacts/segments.supplement_a.jsonl \
-  --events artifacts/annotations/review_events.jsonl \
-  --reviewer-id YOUR_REVIEWER_ID
-```
-
-标注服务强制绑定 `127.0.0.1`。完整要求见 [`docs/ANNOTATION_GUIDE_ZH.md`](docs/ANNOTATION_GUIDE_ZH.md)。正式指标至少应满足：
-
-- 问题经过逐条人工视频核验；
-- 保存 append-only 复核事件与候选文件 SHA-256；
-- 按视频冻结 development/validation/test，避免相邻片段泄漏；
-- 单独报告 audio、visual、OCR、multimodal 和 unanswerable；
-- 同时报告检索、答案质量、P50/P95 延迟和显存峰值。
-
-## 测试与质量约束
-
-```bash
-python -m pytest -q
-python -m ruff check src scripts tests
-```
-
-测试不会下载或加载大模型，覆盖片段化、查询路由、级联回退、候选并集、RRF 基线、Pipeline、FAISS 数值规范、帧级聚合、索引 manifest、API、数据集验证、split 防泄漏和复核事件生命周期。真实 GPU 验收仍需单独执行完整预处理、建库和问答流程。
-
-## 学校服务器教程 Pipeline
-
-见 [启动命令与实际验收记录](docs/SCHOOL_PIPELINE_STATUS.md)。已找到学校官方代理并下载教程子集，见 [网络与数据发现记录](docs/SCHOOL_NETWORK_DISCOVERY.md)。教程 GPU 预处理仍待 Slurm 审批；新闻模型回归不等同于 TutorialVQA 验收。
-
-最新教程时间戳修复和验收状态见 [TutorialVQA 验收进度](docs/TUTORIALVQA_ACCEPTANCE.md)。
-
-当前真实验收结果见 [TutorialVQA 运行记录](reports/tutorialvqa/2026-09-07/README.md)：范围检索通过，三条教程问答均拒答，完整 Pipeline 尚未通过。
+尚未验证全库模型效果、中英文跨语言效果和用户节省时间比例。ASR/OCR 可能有误，引用校验不保证事实正确；无用户访谈、线上用户或留存数据。下一步优先补真实 GPU 问答、失败分析和用户任务测试。旧配置和研究材料保留在 [技术档案](docs/TECHNICAL_ARCHIVE.md)，不作为当前默认展示。

@@ -1,0 +1,50 @@
+{
+  "mode": "CPU BM25 preview; no model acceptance",
+  "real": {
+    "global_search": {
+      "count": 3,
+      "video_ids": [
+        "14643",
+        "4713",
+        "14643"
+      ]
+    },
+    "first_playback": {
+      "src": "http://127.0.0.1:5001/api/videos/14643",
+      "time": 75.008125,
+      "readyState": 4
+    },
+    "scoped_playback": {
+      "src": "http://127.0.0.1:5001/api/videos/14644",
+      "time": 150,
+      "readyState": 4
+    },
+    "scoped_search": {
+      "video_id": "14644",
+      "count": 3
+    },
+    "console_errors_before_expected_failures": [],
+    "preview_ask_503": true,
+    "keyboard_example": true,
+    "viewports": [
+      {
+        "width": 1440,
+        "height": 1080,
+        "horizontal_overflow": false
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "horizontal_overflow": false
+      }
+    ]
+  },
+  "ui_fixtures": {
+    "safe_text_and_clickable_citation": true,
+    "abstention": true,
+    "empty_results": true,
+    "honest_loading_and_disabled_submit": true,
+    "network_error_and_retry": true
+  },
+  "javascript_errors": []
+}

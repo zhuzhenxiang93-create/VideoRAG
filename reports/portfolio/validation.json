@@ -1,0 +1,32 @@
+{
+  "pytest": "109 passed",
+  "changed_python_ruff": "passed",
+  "repository_ruff": {
+    "issue_count": 47,
+    "issues_in_changed_files": 0,
+    "note": "Existing unrelated lint issues retained; no broad refactor"
+  },
+  "relative_markdown_links": {
+    "broken": []
+  },
+  "public_assets": {
+    "docs/media/workspace-desktop.png": 134069,
+    "docs/media/workspace-mobile.png": 183845
+  },
+  "gpu_job": {
+    "id": 19048,
+    "state": "PENDING",
+    "reason": "JobHeldUser",
+    "admin_comment": "PENDING_APPROVAL"
+  },
+  "model_acceptance": "blocked; no new global model inference",
+  "local_workspace_modified": false,
+  "visual_review": "Desktop and 390px mobile reviewed in browser; empty-player controls overlap fixed and rechecked",
+  "committed_content_check": {
+    "files": 25,
+    "paths_with_forbidden_name": [],
+    "files_over_2MB": [],
+    "credential_pattern_hits": [],
+    "data_models_indexes_logs": []
+  }
+}

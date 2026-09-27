@@ -1,0 +1,33 @@
+{
+  "dataset": "TutorialVQA",
+  "split": "test",
+  "question_count": 1239,
+  "video_count": 76,
+  "retrieval": {
+    "recall@1": 0.5988700564971752,
+    "recall@5": 0.9217110573042776,
+    "recall@10": 0.976594027441485,
+    "ndcg@1": 0.5988700564971752,
+    "ndcg@5": 0.40515054531039707,
+    "ndcg@10": 0.43964751019340037,
+    "mrr": 0.7297439691507505,
+    "mean_best_temporal_iou@1": 0.24436384477462955,
+    "mean_best_temporal_iou@5": 0.3899818783193545,
+    "mean_best_temporal_iou@10": 0.43800418916738004,
+    "scope_violation_count": 0,
+    "scope_violation_rate": 0.0,
+    "latency_ms": {
+      "mean": 1.1824540849989302,
+      "median": 0.39345602272078395,
+      "p95": 0.5786849942523986
+    }
+  },
+  "configuration": {
+    "segments": "artifacts/tutorialvqa/scale-76/segments.ocr.jsonl",
+    "index_dir": "artifacts/tutorialvqa/scale-76/indexes-en-clip",
+    "config": "config.tutorialvqa.toml",
+    "top_k": 10,
+    "scoped_by_video_id": true,
+    "reference_labels_used_after_inference_only": true
+  }
+}

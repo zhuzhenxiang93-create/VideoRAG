@@ -64,3 +64,7 @@ curl -sS -X POST http://127.0.0.1:5000/api/ask -H 'Content-Type: application/jso
 ## 当前报告口径
 
 既有 `artifacts/tutorialvqa/scale-76/metrics/test-report.json` 的 Recall@5=92.17% 是**已提供正确视频 ID 的视频内片段检索**。它不是全库视频召回，也未经过模型精排。全库和端到端结果应读取 `metrics-global/report.json`，仅在对应 GPU 作业成功完成后使用。
+
+## Portfolio acceptance (2026-09-27)
+
+Job 19048 remains PENDING_APPROVAL; no global model results exist yet. See [acceptance](../reports/portfolio/ACCEPTANCE.md) and [runbook](RUNBOOK.md). Reranking now uses one frozen candidate pool via rerank_candidates; baseline_ms measures recall/merge/dedup, rerank_only_ms measures model scoring, reranked_ms is their sum. run-config.json records source/config/data hashes, Git commit, warmup and sample positions. Public CPU preview screenshots are not model acceptance.

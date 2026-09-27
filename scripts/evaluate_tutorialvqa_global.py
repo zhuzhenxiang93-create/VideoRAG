@@ -5,7 +5,10 @@ Question labels are consulted only after inference. No video_id is passed to sea
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
 from time import perf_counter
@@ -49,6 +52,29 @@ def main() -> None:
     if args.generate_sample:
         count = min(args.generate_sample, len(questions))
         generated_positions = {round(i * (len(questions) - 1) / max(count - 1, 1)) for i in range(count)}
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    def fingerprint(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    configuration = {
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "script_sha256": fingerprint(Path(__file__)),
+        "questions": str(args.questions), "questions_sha256": fingerprint(args.questions),
+        "segments": str(args.segments), "segments_sha256": fingerprint(args.segments),
+        "config": str(args.config), "config_sha256": fingerprint(args.config),
+        "config_toml": args.config.read_text(), "index_dir": str(args.index_dir),
+        "limit": args.limit, "generate_sample": args.generate_sample,
+        "generated_positions": sorted(generated_positions),
+        "candidate_pool": "one frozen deduplicated pool; rerank_candidates does not recall again",
+        "top_k": [1, 5], "candidate_pool_cap": 20,
+        "warmup": "retrievers, then one reranked search and one ask if generation enabled",
+        "latency": "server perf_counter; excludes network, browser and initial warmup",
+        "baseline_ms": "recall + merge + time deduplication",
+        "rerank_only_ms": "model reranking of the frozen pool",
+        "reranked_ms": "baseline_ms + rerank_only_ms",
+        "relevance": "same video and strictly positive overlap with any reference interval",
+    }
+    (args.output_dir / "run-config.json").write_text(json.dumps(configuration, indent=2))
     pipeline = build_real_pipeline(
         segments_path=args.segments, index_dir=args.index_dir,
         config_path=args.config, device="cuda",
@@ -66,7 +92,7 @@ def main() -> None:
         "baseline_video@1", "baseline_video@5", "reranked_video@1", "reranked_video@5",
         "baseline_segment@1", "baseline_segment@5", "baseline_segment@20",
         "reranked_segment@1", "reranked_segment@5",
-        "baseline_ms", "reranked_ms", "answer_ms", "answer_f1", "citation_valid", "answer_evidence_hit",
+        "baseline_ms", "rerank_only_ms", "reranked_ms", "answer_ms", "answer_f1", "citation_valid", "answer_evidence_hit",
     )}
     answered = 0
     with out.open("w") as stream:
@@ -78,12 +104,17 @@ def main() -> None:
             baseline = pipeline.search(question)
             baseline_ms = (perf_counter() - t0) * 1000
             t0 = perf_counter()
-            reranked = pipeline.search(question, rerank=True)
-            reranked_ms = (perf_counter() - t0) * 1000
+            reranked = pipeline.rerank_candidates(question, baseline)
+            rerank_only_ms = (perf_counter() - t0) * 1000
+            reranked_ms = baseline_ms + rerank_only_ms
             row = {"question_id": item["question_id"], "reference_video_id": video_id,
                    "baseline_ids": [e.segment.segment_id for e in baseline],
                    "reranked_ids": [e.segment.segment_id for e in reranked],
-                   "baseline_ms": baseline_ms, "reranked_ms": reranked_ms}
+                   "baseline_ms": baseline_ms, "reranked_ms": reranked_ms,
+                   "rerank_only_ms": rerank_only_ms,
+                   "reference_intervals": intervals,
+                   "question": question,
+                   "candidate_pool_size": len(baseline)}
             for prefix, evidence in (("baseline", baseline), ("reranked", reranked)):
                 for k in (1, 5):
                     key = f"{prefix}_video@{k}"
@@ -95,12 +126,18 @@ def main() -> None:
             row["baseline_segment@20"] = segment_hit(baseline, video_id, intervals, 20)
             totals["baseline_segment@20"].append(row["baseline_segment@20"])
             totals["baseline_ms"].append(baseline_ms)
+            totals["rerank_only_ms"].append(rerank_only_ms)
             totals["reranked_ms"].append(reranked_ms)
             if position in generated_positions:
                 answer = pipeline.ask(question)
                 citations = [e.segment for e in answer.evidence]
                 row.update({"answer": answer.answer, "abstained": answer.abstained,
                             "citations": list(answer.citations),
+                            "evidence": [{"segment_id": e.segment.segment_id,
+                                          "video_id": e.segment.video_id,
+                                          "start_time": e.segment.start_time,
+                                          "end_time": e.segment.end_time} for e in answer.evidence],
+                            "latency_ms": answer.latency_ms,
                             "answer_ms": answer.latency_ms["total"],
                             "answer_f1": token_f1(answer.answer, item["reference_answer"]),
                             "citation_valid": bool(answer.citations) and set(answer.citations).issubset(known_ids)
@@ -114,12 +151,15 @@ def main() -> None:
             if (position + 1) % 25 == 0 or position + 1 == len(questions):
                 print(f"[{position + 1}/{len(questions)}] global evaluation", flush=True)
     report = {"dataset": "TutorialVQA", "split": questions[0].get("split"),
-              "question_count": len(questions), "video_count": len({q["video_id"] for q in questions}),
+              "configuration": configuration,
+              "question_count": len(questions),
+              "indexed_video_count": len(pipeline.videos()),
+              "question_video_count": len({q["video_id"] for q in questions}),
               "scope": "all indexed videos; no ground-truth video_id passed to inference",
               "relevance": "any positive overlap with official answer interval",
               "reranker": "Qwen3-Reranker-0.6B text model over ASR, OCR and captions",
               "retrieval": {key: mean(values) for key, values in totals.items() if values and "@" in key},
-              "latency_ms": {key: latency_summary(totals[key]) for key in ("baseline_ms", "reranked_ms", "answer_ms") if totals[key]},
+              "latency_ms": {key: latency_summary(totals[key]) for key in ("baseline_ms", "rerank_only_ms", "reranked_ms", "answer_ms") if totals[key]},
               "generation": {"count": len(totals["answer_f1"]), "answered": answered,
                              "token_f1": mean(totals["answer_f1"]) if totals["answer_f1"] else None,
                              "citation_valid_rate": mean(totals["citation_valid"]) if totals["citation_valid"] else None,

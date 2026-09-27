@@ -7,8 +7,12 @@ from flask import Flask, jsonify, render_template, request, send_file
 from video_rag.pipeline import VideoRAGPipeline
 
 
-def create_app(pipeline: VideoRAGPipeline) -> Flask:
+def create_app(
+    pipeline: VideoRAGPipeline, *, video_titles: dict[str, str] | None = None,
+    preview: bool = False,
+) -> Flask:
     app = Flask(__name__)
+    titles = video_titles or {}
 
     @app.get("/")
     def index():
@@ -16,11 +20,15 @@ def create_app(pipeline: VideoRAGPipeline) -> Flask:
 
     @app.get("/api/health")
     def health():
-        return jsonify({"status": "ok"})
+        return jsonify({"status": "ok", "preview": preview})
 
     @app.post("/api/ask")
     def ask():
         payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "request body must be an object"}), 400
+        if preview:
+            return jsonify({"error": "当前为界面预览，未启用答案生成。请使用“找片段”，或启动 GPU 服务。"}), 503
         question = payload.get("question")
         if not isinstance(question, str) or not question.strip():
             return jsonify({"error": "question must be a non-empty string"}), 400
@@ -37,22 +45,26 @@ def create_app(pipeline: VideoRAGPipeline) -> Flask:
         response = result.to_dict()
         response["status"] = "insufficient_evidence" if result.abstained else "answered"
         for evidence in response["evidence"]:
+            evidence["video_title"] = titles.get(evidence["video_id"])
             evidence["video_url"] = f"/api/videos/{evidence['video_id']}"
         return jsonify(response)
 
     @app.get("/api/videos")
     def videos():
-        return jsonify({"videos": pipeline.videos()})
+        return jsonify({"videos": [dict(v, video_title=titles.get(v["video_id"]))
+                                   for v in pipeline.videos()]})
 
     @app.post("/api/search")
     def search():
         payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "request body must be an object"}), 400
         try:
             evidence = [
                 e.to_dict()
                 for e in pipeline.search(
                     payload.get("question"), payload.get("video_ids"),
-                    rerank=payload.get("rerank", False),
+                    rerank=False if preview else payload.get("rerank", False),
                 )
             ]
         except ValueError as exc:
@@ -60,6 +72,7 @@ def create_app(pipeline: VideoRAGPipeline) -> Flask:
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 503
         for item in evidence:
+            item["video_title"] = titles.get(item["video_id"])
             item["video_url"] = f"/api/videos/{item['video_id']}"
         return jsonify({"evidence": evidence, "answer": "", "status": "search_results"})
 

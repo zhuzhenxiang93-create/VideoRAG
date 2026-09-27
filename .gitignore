@@ -26,3 +26,5 @@ data/processed/
 data/tutorialvqa/
 
 .runtime-video/
+
+logs/

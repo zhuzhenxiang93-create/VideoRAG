@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from video_rag.adapters import (
@@ -201,6 +202,8 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=5000, type=int)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--video-metadata", type=Path,
+                        default=Path("data/tutorialvqa/original/repository/videos.json"))
     parser.add_argument(
         "--low-vram",
         action="store_true",
@@ -217,7 +220,12 @@ def main() -> None:
     print("[Warmup] Loading retrieval models...")
     pipeline.warmup()
     print("[Warmup] Retrieval models are ready.")
-    create_app(pipeline).run(host=args.host, port=args.port, debug=False)
+    titles = {}
+    if args.video_metadata.is_file():
+        titles = {str(v["video_id"]): v["video_title"]
+                  for v in json.loads(args.video_metadata.read_text()) if v.get("video_title")}
+    create_app(pipeline, video_titles=titles).run(
+        host=args.host, port=args.port, debug=False, threaded=False)
 
 
 if __name__ == "__main__":

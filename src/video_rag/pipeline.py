@@ -403,6 +403,15 @@ class VideoRAGPipeline:
         candidates = self._deduplicate_candidates([self._segments[h.segment_id] for h in hits])
         if not rerank or not candidates:
             return [Evidence(s, scores[s.segment_id], 0.0) for s in candidates]
+        return self.rerank_candidates(query, [Evidence(s, scores[s.segment_id], 0.0)
+                                               for s in candidates])
+
+    def rerank_candidates(self, query: str, evidence: list[Evidence]) -> list[Evidence]:
+        """Rerank one frozen candidate pool, without recalling again."""
+        if not evidence:
+            return []
+        candidates = [e.segment for e in evidence]
+        scores = {e.segment.segment_id: e.fused_score for e in evidence}
         rerank_scores = self._reranker.score(query, candidates)
         if len(rerank_scores) != len(candidates):
             raise ValueError("Reranker must return one score per candidate")
