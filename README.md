@@ -1,8 +1,27 @@
 # VideoRAG：片段级中文多模态视频问答
 
-一个可复现的片段级 VideoRAG 系统：将视频转成带时间戳的 ASR、关键帧和视觉描述，使用稀疏、文本向量和图文向量三路召回，经 RRF 融合与 Qwen3-Reranker 精排后，由 Qwen2.5-VL 基于 Top-K 证据生成答案。API 同时返回证据片段、时间范围和阶段延迟，前端可以直接跳转到对应视频位置。
+**让用户从“反复拖进度条找答案”变成“提问 → 查看证据 → 跳转到对应时间点”**
+
+VideoRAG 面向教程、操作演示等长视频场景。系统将视频转成带时间戳的 ASR、关键帧和视觉描述，通过稀疏检索、文本向量和图文向量进行多路召回，经 RRF 与 Qwen3-Reranker 精排后，由 Qwen2.5-VL 基于 Top-K 证据生成答案；API 同时返回证据片段、时间范围和阶段延迟，前端可以直接跳转到对应视频位置。
 
 > 当前状态：核心流水线、索引校验、帧级检索实验、评测工具和人工复核系统均已实现；仓库中的问题集仍是自动生成候选集，尚不能把诊断指标当作正式人工测试集结果。
+
+## Product at a glance
+
+| 维度 | 设计 |
+|---|---|
+| **User problem** | 用户只想找到教程里的某一步操作，却需要反复拖动进度条，并且很难确认 AI 答案对应视频中的哪一段。 |
+| **User journey** | 选择视频 / 视频集合 → 提问 → 检索候选证据 → 精排 → 证据约束生成 → 返回答案、证据和时间戳 → 一键回看。 |
+| **Retrieval design** | BM25-like + Qwen3-Embedding + Chinese-CLIP 三路召回，使用 RRF 融合异构排序，再用 Qwen3-Reranker 精排。 |
+| **Grounding** | Qwen2.5-VL 只基于最终证据生成；结果附带 segment、start/end time 和证据内容。 |
+| **Reliability** | 低置信度拒答；索引 manifest 校验模型、维度、条目数和 SHA-256；候选数据需经过人工视频核验后才能成为正式评测集。 |
+| **Evaluation** | 检索侧跟踪 Recall@K、MRR、nDCG；答案侧跟踪 Exact Match / Token F1；同时记录分阶段延迟。 |
+
+## Recruiter 2-minute tour
+
+1. 先看下面的系统架构，理解从视频处理到回答生成的完整链路。
+2. 运行 CPU Demo，观察 API 如何返回 `answer + evidence + timestamp + latency`。
+3. 再看“评测边界”和“人工复核”部分，了解项目如何避免把自动生成问题集误当作正式 benchmark。
 
 ## 系统架构
 
